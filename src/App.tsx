@@ -2,16 +2,17 @@ import { useMemo, useRef, useState } from "react";
 import { saveAs } from "file-saver";
 import "./App.css";
 import { GOTCHA_MESSAGES } from "./config/defaults";
-import { cloneDefaultSettings, loadSettings, resetSettings, saveSettings, validateSettings } from "./config/storage";
+import { loadSettings, resetSettings, saveSettings, validateSettings } from "./config/storage";
 import { computePeriod } from "./core/dateTime";
 import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
 import { mapInputFiles, missingRequiredInputs, permissionMode } from "./io/files";
 import { detectAttendancePeriodDate, readWorkbook } from "./io/excel";
-import { preparePermissionFile, writePreparedPermissionWorkbook } from "./permissions/prepare";
 
 type WorkerResponse =
+  | { type: "status"; message: string }
   | { type: "log"; entry: RunLogEntry }
   | { type: "done"; result: PayrollRunResult }
+  | { type: "prepared"; workbook: ArrayBuffer; summary: string; logs: RunLogEntry[] }
   | { type: "error"; message: string };
 
 const currentYear = new Date().getFullYear();
@@ -22,7 +23,7 @@ function downloadBuffer(buffer: ArrayBuffer, filename: string, mime = "applicati
 }
 
 function formatLog(entry: RunLogEntry): string {
-  return `${new Date(entry.at).toLocaleTimeString()}  ${entry.step}  ${entry.message}`;
+  return `${new Date(entry.at).toLocaleTimeString()}  ${stepLabel(entry.step)}  ${entry.message}`;
 }
 
 function formatMetric(metric: StepMetrics): string {
@@ -35,6 +36,50 @@ function formatMetric(metric: StepMetrics): string {
   if (typeof metric.skippedDate === "number") parts.push(`${metric.skippedDate} skipped by date`);
   if (typeof metric.warnings?.length === "number" && metric.warnings.length > 0) parts.push(`${metric.warnings.length} warnings`);
   return parts.length > 0 ? parts.join(", ") : "completed";
+}
+
+function stepLabel(step: string): string {
+  const labels: Record<string, string> = {
+    engine: "Engine",
+    settings: "Settings",
+    prepare_permission_report: "Prepare permissions",
+    extend_nagwa_technologies: "Build detailed calendar",
+    fill_attendance: "Fill attendance",
+    extend_final_nagwa_technologies: "Build final calendar",
+    complete_final: "Complete final report",
+    run: "Run",
+  };
+  return labels[step] ?? step;
+}
+
+type AbbreviationRow = {
+  id: string;
+  label: string;
+  code: string;
+};
+
+let rowCounter = 0;
+
+function nextRowId(prefix: string): string {
+  rowCounter += 1;
+  return `${prefix}-${Date.now()}-${rowCounter}`;
+}
+
+function abbreviationRowsFrom(abbreviations: PayrollSettings["abbreviations"]): AbbreviationRow[] {
+  return Object.entries(abbreviations).map(([label, code], index) => ({
+    id: `abbr-${index}-${label}`,
+    label,
+    code,
+  }));
+}
+
+function abbreviationsFromRows(rows: AbbreviationRow[]): PayrollSettings["abbreviations"] {
+  const abbreviations: PayrollSettings["abbreviations"] = {};
+  for (const row of rows) {
+    const label = row.label.trim();
+    if (label) abbreviations[label] = row.code;
+  }
+  return abbreviations;
 }
 
 function TextInput(props: {
@@ -95,6 +140,7 @@ function UploadTile(props: {
 function App() {
   const [inputs, setInputs] = useState<PayrollInputFiles>({});
   const [settings, setSettings] = useState<PayrollSettings>(() => loadSettings());
+  const [abbreviationRows, setAbbreviationRows] = useState<AbbreviationRow[]>(() => abbreviationRowsFrom(loadSettings().abbreviations));
   const [permissionOptions, setPermissionOptions] = useState<PermissionPrepOptions>({
     month: currentMonth,
     year: currentYear,
@@ -108,6 +154,8 @@ function App() {
   const [result, setResult] = useState<PayrollRunResult | null>(null);
   const [detectedPeriod, setDetectedPeriod] = useState<string>("");
   const [running, setRunning] = useState(false);
+  const [preparingPermissions, setPreparingPermissions] = useState(false);
+  const [engineStatus, setEngineStatus] = useState("");
   const [error, setError] = useState<string>("");
   const workerRef = useRef<Worker | null>(null);
 
@@ -148,22 +196,56 @@ function App() {
     saveSettings(next);
   }
 
+  function getWorker(): Worker {
+    if (workerRef.current === null) {
+      workerRef.current = new Worker(new URL("./workers/pyodideWorker.ts", import.meta.url), { type: "module" });
+    }
+    return workerRef.current;
+  }
+
+  function stopWorker() {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    setRunning(false);
+    setPreparingPermissions(false);
+    setEngineStatus("Stopped.");
+  }
+
   async function preparePermissionsOnly() {
     if (!standalonePermissionFile) {
       setError("Upload Nagwa_Permission_Request_Report.xls[x] first.");
       return;
     }
     setError("");
+    setResult(null);
+    setMetrics([]);
+    setLogs([]);
+    setPreparingPermissions(true);
     setStandaloneSummary("Preparing permissions...");
-    try {
-      const prepared = await preparePermissionFile(standalonePermissionFile, permissionOptions);
-      const workbook = writePreparedPermissionWorkbook(prepared.rows, "xls");
-      downloadBuffer(workbook, "Nagwa_Permission_Request_permission_details.xls", "application/vnd.ms-excel");
-      setStandaloneSummary(`${prepared.loaded} loaded, ${prepared.kept} kept, ${prepared.excludedByCutoff} excluded by cutoff.`);
-    } catch (prepError) {
+    const worker = getWorker();
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const message = event.data;
+      if (message.type === "status") {
+        setEngineStatus(message.message);
+      } else if (message.type === "log") {
+        setLogs((prev) => [...prev, message.entry]);
+      } else if (message.type === "prepared") {
+        downloadBuffer(message.workbook, "Nagwa_Permission_Request_permission_details.xls", "application/vnd.ms-excel");
+        setLogs(message.logs);
+        setStandaloneSummary(message.summary);
+        setPreparingPermissions(false);
+      } else if (message.type === "error") {
+        setStandaloneSummary("");
+        setError(message.message);
+        setPreparingPermissions(false);
+      }
+    };
+    worker.onerror = (event) => {
       setStandaloneSummary("");
-      setError(prepError instanceof Error ? prepError.message : String(prepError));
-    }
+      setError(event.message);
+      setPreparingPermissions(false);
+    };
+    worker.postMessage({ type: "preparePermissions", file: standalonePermissionFile, permissionOptions });
   }
 
   async function runPayroll() {
@@ -171,6 +253,7 @@ function App() {
     setResult(null);
     setMetrics([]);
     setLogs([]);
+    setStandaloneSummary("");
     if (missing.length > 0) {
       setError(`Missing required files: ${missing.join(", ")}`);
       return;
@@ -180,23 +263,26 @@ function App() {
       return;
     }
     setRunning(true);
-    const worker = new Worker(new URL("./workers/pipelineWorker.ts", import.meta.url), { type: "module" });
-    workerRef.current = worker;
+    const worker = getWorker();
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       const message = event.data;
-      if (message.type === "log") {
+      if (message.type === "status") {
+        setEngineStatus(message.message);
+      } else if (message.type === "log") {
         setLogs((prev) => [...prev, message.entry]);
       } else if (message.type === "done") {
         setResult(message.result);
         setMetrics(message.result.metrics);
         setLogs(message.result.logs);
         setRunning(false);
-        worker.terminate();
-      } else {
+      } else if (message.type === "error") {
         setError(message.message);
         setRunning(false);
-        worker.terminate();
       }
+    };
+    worker.onerror = (event) => {
+      setError(event.message);
+      setRunning(false);
     };
     worker.postMessage({
       type: "run",
@@ -209,6 +295,7 @@ function App() {
   function resetAllSettings() {
     const defaults = resetSettings();
     setSettings(defaults);
+    setAbbreviationRows(abbreviationRowsFrom(defaults.abbreviations));
     setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: defaults.requestCutoffDaysDefault }));
   }
 
@@ -238,27 +325,21 @@ function App() {
     });
   }
 
-  function updateAbbreviation(oldLabel: string, nextLabel: string, nextCode: string) {
-    const next = { ...settings.abbreviations };
-    delete next[oldLabel];
-    if (nextLabel.trim()) next[nextLabel] = nextCode;
-    updateSettings({ ...settings, abbreviations: next });
+  function commitAbbreviationRows(nextRows: AbbreviationRow[]) {
+    setAbbreviationRows(nextRows);
+    updateSettings({ ...settings, abbreviations: abbreviationsFromRows(nextRows) });
+  }
+
+  function updateAbbreviation(id: string, field: "label" | "code", value: string) {
+    commitAbbreviationRows(abbreviationRows.map((row) => row.id === id ? { ...row, [field]: value } : row));
   }
 
   function addAbbreviation() {
-    let label = "new leave type";
-    let counter = 2;
-    while (settings.abbreviations[label] !== undefined) {
-      label = `new leave type ${counter}`;
-      counter += 1;
-    }
-    updateSettings({ ...settings, abbreviations: { ...settings.abbreviations, [label]: "" } });
+    commitAbbreviationRows([...abbreviationRows, { id: nextRowId("abbr"), label: "new leave type", code: "" }]);
   }
 
-  function removeAbbreviation(label: string) {
-    const next = { ...settings.abbreviations };
-    delete next[label];
-    updateSettings({ ...settings, abbreviations: next });
+  function removeAbbreviation(id: string) {
+    commitAbbreviationRows(abbreviationRows.filter((row) => row.id !== id));
   }
 
   return (
@@ -272,16 +353,17 @@ function App() {
           </p>
         </div>
         <div className="hero-actions">
-          <button className="primary" type="button" onClick={runPayroll} disabled={running || missing.length > 0 || validationErrors.length > 0}>
+          <button className="primary" type="button" onClick={runPayroll} disabled={running || preparingPermissions || missing.length > 0 || validationErrors.length > 0}>
             {running ? "Running..." : "Run Payroll"}
           </button>
-          <button type="button" onClick={() => workerRef.current?.terminate()} disabled={!running}>
+          <button type="button" onClick={stopWorker} disabled={!running && !preparingPermissions}>
             Stop
           </button>
         </div>
       </header>
 
       {error && <div className="toast error">{error}</div>}
+      {engineStatus && <div className="toast info">{engineStatus}</div>}
 
       <section className="grid two">
         <div
@@ -388,7 +470,9 @@ function App() {
               No request cutoff
             </label>
           </div>
-          <button type="button" onClick={preparePermissionsOnly}>Prepare Permissions Only</button>
+          <button type="button" onClick={preparePermissionsOnly} disabled={running || preparingPermissions}>
+            {preparingPermissions ? "Preparing..." : "Prepare Permissions Only"}
+          </button>
           {standaloneSummary && <p className="summary-line">{standaloneSummary}</p>}
         </div>
       </section>
@@ -402,7 +486,7 @@ function App() {
         }}
       >
         <h2>Private Templates</h2>
-        <p>Upload private/current employee templates here. They stay in the browser and are not bundled in the public repo.</p>
+        <p>Required for real runs: upload the two current styled templates here. They stay in the browser and are not bundled in the public repo.</p>
         <div className="bulk-upload">
           <label className="file-button">
             Choose Files
@@ -421,17 +505,15 @@ function App() {
         <div className="upload-grid two-tiles">
           <UploadTile
             title="Nagwa Technologies template"
-            description="Optional: Nagwa Technologies.xlsx"
+            description="Required: Nagwa Technologies.xlsx"
             file={inputs.nagwaTemplate}
-            optional
             accept=".xlsx"
             onFiles={(files) => void addTemplateFiles(files)}
           />
           <UploadTile
             title="Final Nagwa Technologies template"
-            description="Optional: Final Nagwa Technologies.xlsx"
+            description="Required: Final Nagwa Technologies.xlsx"
             file={inputs.finalTemplate}
-            optional
             accept=".xlsx"
             onFiles={(files) => void addTemplateFiles(files)}
           />
@@ -476,7 +558,7 @@ function App() {
                 Employee A is restricted in the first payroll cycle starting from the “First cycle starts” date. Employee B is restricted in the next cycle, then they alternate every cycle.
               </p>
               {settings.specialRulePairs.map((pair, index) => (
-                <div className="editable-card" key={`${pair.employeeA}-${pair.employeeB}-${pair.anchorDate}`}>
+                <div className="editable-card" key={`special-rule-pair-${index}`}>
                   <TextInput label="Employee A" type="number" value={pair.employeeA} onChange={(value) => {
                     const next = [...settings.specialRulePairs];
                     next[index] = { ...pair, employeeA: Number(value) };
@@ -517,7 +599,7 @@ function App() {
                   <span>Action</span>
                 </div>
                 {settings.hourReductionWindows.map((window, index) => (
-                  <div className="table-row four-cols" key={`${window.employeeCode}-${index}`}>
+                  <div className="table-row four-cols" key={`hour-reduction-${index}`}>
                     <input type="number" value={window.employeeCode} onChange={(event) => updateHourReduction(index, "employeeCode", event.target.value)} />
                     <input type="date" value={window.startDate ?? ""} onChange={(event) => updateHourReduction(index, "startDate", event.target.value)} />
                     <input type="date" value={window.endDate ?? ""} onChange={(event) => updateHourReduction(index, "endDate", event.target.value)} />
@@ -537,11 +619,11 @@ function App() {
                   <span>Short Code</span>
                   <span>Action</span>
                 </div>
-                {Object.entries(settings.abbreviations).map(([label, code], index) => (
-                  <div className="table-row three-cols" key={`${index}-${label}`}>
-                    <input value={label} onChange={(event) => updateAbbreviation(label, event.target.value, code)} />
-                    <input value={code} onChange={(event) => updateAbbreviation(label, label, event.target.value)} />
-                    <button type="button" className="secondary-action" onClick={() => removeAbbreviation(label)}>Remove</button>
+                {abbreviationRows.map((row) => (
+                  <div className="table-row three-cols" key={row.id}>
+                    <input value={row.label} onChange={(event) => updateAbbreviation(row.id, "label", event.target.value)} />
+                    <input value={row.code} onChange={(event) => updateAbbreviation(row.id, "code", event.target.value)} />
+                    <button type="button" className="secondary-action" onClick={() => removeAbbreviation(row.id)}>Remove</button>
                   </div>
                 ))}
               </div>
@@ -550,12 +632,8 @@ function App() {
           </div>
           <div className="settings-reset-actions">
             <div className="reset-action-card">
-              <button type="button" onClick={resetAllSettings}>Reset to standard settings</button>
-              <p>Use this when you want to start over. It restores all rule settings and updates the current permission cutoff field.</p>
-            </div>
-            <div className="reset-action-card">
-              <button type="button" onClick={() => updateSettings(cloneDefaultSettings())}>Reload standard settings</button>
-              <p>Use this to restore the rule tables only. The current permission-preparation controls stay as they are.</p>
+              <button type="button" onClick={resetAllSettings}>Restore default settings</button>
+              <p>Use this to return all payroll rules and the permission cutoff to the standard values shipped with the tool.</p>
             </div>
           </div>
           {validationErrors.length > 0 && (
@@ -569,9 +647,12 @@ function App() {
       <section className="grid two">
         <div className="card">
           <h2>Run Log</h2>
+          <p className="helper-text">
+            If a public-holiday date says it was not found, that date is outside the detected 21-to-20 payroll period or falls on a Friday/Saturday, so there is no workday column to mark.
+          </p>
           <ol className="steps">
             {["extend_nagwa_technologies", "fill_attendance", "extend_final_nagwa_technologies", "complete_final"].map((step, index) => (
-              <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/4 {step}</li>
+              <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/4 {stepLabel(step)}</li>
             ))}
           </ol>
           <div className="log-panel">
@@ -592,7 +673,7 @@ function App() {
             <p>Outputs will appear after a successful run.</p>
           )}
           <div className="metrics">
-            {metrics.map((metric) => <p key={metric.step}><strong>{metric.step}</strong>: {formatMetric(metric)}</p>)}
+            {metrics.map((metric) => <p key={metric.step}><strong>{stepLabel(metric.step)}</strong>: {formatMetric(metric)}</p>)}
           </div>
         </div>
       </section>

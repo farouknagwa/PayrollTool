@@ -86,6 +86,8 @@ export function missingRequiredInputs(inputs: PayrollInputFiles): string[] {
   if (!inputs.preparedPermissions && !inputs.rawPermissions) {
     missing.push("Nagwa_Permission_Request_permission_details.xls[x] or Nagwa_Permission_Request_Report.xls[x]");
   }
+  if (!inputs.nagwaTemplate) missing.push("Nagwa Technologies.xlsx template");
+  if (!inputs.finalTemplate) missing.push("Final Nagwa Technologies.xlsx template");
   return missing;
 }
 

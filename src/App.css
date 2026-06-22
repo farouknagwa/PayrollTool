@@ -168,6 +168,12 @@
   background: #fff1f2;
 }
 
+.toast.info {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
 .meta-row {
   display: flex;
   flex-wrap: wrap;
