@@ -101,8 +101,8 @@ async function parseReports(inputs: PayrollInputFiles, permissionOptions: Permis
     const prepared = await preparePermissionFile(inputs.rawPermissions, permissionOptions);
     permissions = prepared.rows;
     preparedPermissionsWorkbook = writePreparedPermissionWorkbook(prepared.rows, "xls");
-    log(nowLog("prepare_permission_report.py", `${prepared.loaded} raw permission rows loaded; ${prepared.kept} approved in-period rows kept.`));
-    for (const warning of prepared.warnings) log(nowLog("prepare_permission_report.py", warning, "warn"));
+    log(nowLog("prepare_permission_report", `${prepared.loaded} raw permission rows loaded; ${prepared.kept} approved in-period rows kept.`));
+    for (const warning of prepared.warnings) log(nowLog("prepare_permission_report", warning, "warn"));
   } else {
     permissions = await readPreparedPermissionFile(inputs.preparedPermissions as File);
   }
@@ -375,17 +375,17 @@ export async function runPayrollPipeline(
     onLog?.(entry);
   };
 
-  log(nowLog("run.py", "Starting browser payroll pipeline."));
-  log(nowLog("extend_nagwa_technologies.py", "Detecting first attendance date."));
+  log(nowLog("run", "Starting browser payroll pipeline."));
+  log(nowLog("extend_nagwa_technologies", "Detecting first attendance date."));
   const { reports, attendanceWorkbook, preparedPermissionsWorkbook } = await parseReports(inputs, permissionOptions, log);
   const firstDate = detectAttendancePeriodDate(attendanceWorkbook) ?? reports.attendance[0].attendanceDay;
   const model = makeModel(firstDate as ISODate, reports);
   const workdayCount = model.period.dates.filter((date) => !isWeekend(date)).length;
   const weekendCount = model.period.dates.length - workdayCount;
   metrics.push({ step: "extend_nagwa_technologies", filled: model.period.dates.length, workdayCount, weekendCount });
-  log(nowLog("extend_nagwa_technologies.py", `Replaced calendar with period ${model.period.start} -> ${model.period.end}.`));
+  log(nowLog("extend_nagwa_technologies", `Replaced calendar with period ${model.period.start} -> ${model.period.end}.`));
 
-  log(nowLog("fill_attendance.py", "Applying attendance and HR business rules."));
+  log(nowLog("fill_attendance", "Applying attendance and HR business rules."));
   const fillSteps = [
     fillAttendance(model, reports, settings),
     fillAbsences(model, reports),
@@ -402,17 +402,17 @@ export async function runPayrollPipeline(
   ];
   metrics.push(...fillSteps);
   for (const metric of fillSteps) {
-    log(nowLog("fill_attendance.py", `${metric.step}: ${JSON.stringify(metric)}`));
-    for (const warning of metric.warnings ?? []) log(nowLog("fill_attendance.py", warning, "warn"));
+    log(nowLog("fill_attendance", `${metric.step}: ${JSON.stringify(metric)}`));
+    for (const warning of metric.warnings ?? []) log(nowLog("fill_attendance", warning, "warn"));
   }
 
-  log(nowLog("extend_final_nagwa_technologies.py", `Wrote ${model.period.dates.length} final report dates.`));
+  log(nowLog("extend_final_nagwa_technologies", `Wrote ${model.period.dates.length} final report dates.`));
   metrics.push({ step: "extend_final_nagwa_technologies", filled: model.period.dates.length });
   const detailedWorkbook = await writeDetailedWorkbook(model);
   const finalWorkbook = await writeFinalWorkbook(model, settings);
   metrics.push({ step: "complete_final", filled: model.employees.length * model.period.dates.length, totalsWritten: model.employees.length });
-  log(nowLog("complete_final.py", "Copied shortage values, applied abbreviations, and wrote totals."));
-  log(nowLog("run.py", "All scripts completed successfully.", "success"));
+  log(nowLog("complete_final", "Copied shortage values, applied abbreviations, and wrote totals."));
+  log(nowLog("run", "All scripts completed successfully.", "success"));
 
   const warnings = metrics.flatMap((metric) => metric.warnings ?? []);
   return {

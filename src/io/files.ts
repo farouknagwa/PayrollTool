@@ -75,11 +75,6 @@ export function fileChecklist(inputs: PayrollInputFiles): Array<{ label: string;
       state: inputs.publicHoliday ? "found" : "optional",
       detail: inputs.publicHoliday?.name ?? "Optional; skipped if missing",
     },
-    {
-      label: "Private templates",
-      state: inputs.nagwaTemplate || inputs.finalTemplate ? "found" : "warning",
-      detail: inputs.nagwaTemplate || inputs.finalTemplate ? "Uploaded templates will be used for roster/schedule extraction." : "Sanitized generated templates will be used.",
-    },
   ];
 }
 

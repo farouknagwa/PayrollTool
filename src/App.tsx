@@ -5,7 +5,7 @@ import { GOTCHA_MESSAGES } from "./config/defaults";
 import { cloneDefaultSettings, loadSettings, resetSettings, saveSettings, validateSettings } from "./config/storage";
 import { computePeriod } from "./core/dateTime";
 import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
-import { fileChecklist, mapInputFiles, missingRequiredInputs, permissionMode } from "./io/files";
+import { mapInputFiles, missingRequiredInputs, permissionMode } from "./io/files";
 import { detectAttendancePeriodDate, readWorkbook } from "./io/excel";
 import { preparePermissionFile, writePreparedPermissionWorkbook } from "./permissions/prepare";
 
@@ -39,6 +39,47 @@ function TextInput(props: {
   );
 }
 
+function UploadTile(props: {
+  title: string;
+  description: string;
+  file?: File;
+  optional?: boolean;
+  accept?: string;
+  multiple?: boolean;
+  onFiles: (files: FileList | File[]) => void;
+}) {
+  const state = props.file ? "found" : props.optional ? "optional" : "missing";
+  return (
+    <div
+      className={`upload-tile ${state}`}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => {
+        event.preventDefault();
+        props.onFiles(event.dataTransfer.files);
+      }}
+    >
+      <div className="upload-tile-header">
+        <strong>{props.file ? "Found" : props.optional ? "Optional" : "Missing"}</strong>
+        <span>{props.title}</span>
+      </div>
+      <small>{props.file?.name ?? props.description}</small>
+      <label className="file-button">
+        Choose File
+        <input
+          type="file"
+          accept={props.accept ?? ".xls,.xlsx"}
+          multiple={props.multiple}
+          onChange={(event) => {
+            if (event.target.files) props.onFiles(event.target.files);
+            event.currentTarget.value = "";
+          }}
+        />
+      </label>
+      <span className="drop-hint">or drag and drop here</span>
+    </div>
+  );
+}
+
 function App() {
   const [inputs, setInputs] = useState<PayrollInputFiles>({});
   const [settings, setSettings] = useState<PayrollSettings>(() => loadSettings());
@@ -58,7 +99,6 @@ function App() {
   const [error, setError] = useState<string>("");
   const workerRef = useRef<Worker | null>(null);
 
-  const checklist = useMemo(() => fileChecklist(inputs), [inputs]);
   const validationErrors = useMemo(() => validateSettings(settings), [settings]);
   const missing = useMemo(() => missingRequiredInputs(inputs), [inputs]);
 
@@ -83,6 +123,12 @@ function App() {
         setError(readError instanceof Error ? readError.message : String(readError));
       }
     }
+  }
+
+  async function addTemplateFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    const mapped = mapInputFiles(files);
+    setInputs((prev) => ({ ...prev, ...mapped }));
   }
 
   function updateSettings(next: PayrollSettings) {
@@ -178,7 +224,7 @@ function App() {
 
       <section className="grid two">
         <div
-          className="card dropzone"
+          className="card"
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => {
             event.preventDefault();
@@ -186,23 +232,73 @@ function App() {
           }}
         >
           <h2>Input Files</h2>
-          <p>Drop individual reports or a folder selection. Exact basenames are resolved like Python: `.xlsx` first, then `.xls`.</p>
-          <input
-            type="file"
-            multiple
-            {...{ webkitdirectory: "true" }}
-            onChange={(event) => {
-              if (event.target.files) void addFiles(event.target.files);
-            }}
-          />
-          <div className="checklist">
-            {checklist.map((item) => (
-              <div key={item.label} className={`check ${item.state}`}>
-                <strong>{item.state === "found" ? "Found" : item.state === "missing" ? "Missing" : item.state === "optional" ? "Optional" : "Note"}</strong>
-                <span>{item.label}</span>
-                <small>{item.detail}</small>
-              </div>
-            ))}
+          <p>Choose multiple report files, choose the whole raw-data folder, or drag and drop the folder into this box.</p>
+          <div className="bulk-upload">
+            <label className="file-button">
+              Choose Files
+              <input
+                type="file"
+                multiple
+                accept=".xls,.xlsx"
+                onChange={(event) => {
+                  if (event.target.files) void addFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <label className="file-button">
+              Choose Folder
+              <input
+                type="file"
+                multiple
+                {...{ webkitdirectory: "true", directory: "true" }}
+                onChange={(event) => {
+                  if (event.target.files) void addFiles(event.target.files);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <span className="drop-hint">or drag and drop the whole folder here</span>
+          </div>
+          <div className="upload-grid">
+            <UploadTile
+              title="Attendance Report"
+              description="Required: Attendance Report.xls or .xlsx"
+              file={inputs.attendance}
+              onFiles={(files) => void addFiles(files)}
+            />
+            <UploadTile
+              title="Absence Report"
+              description="Required: Absence Report.xls or .xlsx"
+              file={inputs.absences}
+              onFiles={(files) => void addFiles(files)}
+            />
+            <UploadTile
+              title="Employee Transactions_vacations"
+              description="Required: Employee Transactions_vacations.xls or .xlsx"
+              file={inputs.vacations}
+              onFiles={(files) => void addFiles(files)}
+            />
+            <UploadTile
+              title="Permissions"
+              description="Required: prepared details or raw request report"
+              file={inputs.preparedPermissions ?? inputs.rawPermissions}
+              onFiles={(files) => void addFiles(files)}
+            />
+            <UploadTile
+              title="Resignations"
+              description="Optional: Resignations.xls or .xlsx"
+              file={inputs.resignations}
+              optional
+              onFiles={(files) => void addFiles(files)}
+            />
+            <UploadTile
+              title="Public Holiday"
+              description="Optional: Public Holiday.xls or .xlsx"
+              file={inputs.publicHoliday}
+              optional
+              onFiles={(files) => void addFiles(files)}
+            />
           </div>
           <div className="meta-row">
             <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
@@ -233,6 +329,51 @@ function App() {
           </div>
           <button type="button" onClick={preparePermissionsOnly}>Prepare Permissions Only</button>
           {standaloneSummary && <p className="summary-line">{standaloneSummary}</p>}
+        </div>
+      </section>
+
+      <section
+        className="card"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          void addTemplateFiles(event.dataTransfer.files);
+        }}
+      >
+        <h2>Private Templates</h2>
+        <p>Upload private/current employee templates here. They stay in the browser and are not bundled in the public repo.</p>
+        <div className="bulk-upload">
+          <label className="file-button">
+            Choose Files
+            <input
+              type="file"
+              multiple
+              accept=".xlsx"
+              onChange={(event) => {
+                if (event.target.files) void addTemplateFiles(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
+          <span className="drop-hint">or drag and drop the two template files here</span>
+        </div>
+        <div className="upload-grid two-tiles">
+          <UploadTile
+            title="Nagwa Technologies template"
+            description="Optional: Nagwa Technologies.xlsx"
+            file={inputs.nagwaTemplate}
+            optional
+            accept=".xlsx"
+            onFiles={(files) => void addTemplateFiles(files)}
+          />
+          <UploadTile
+            title="Final Nagwa Technologies template"
+            description="Optional: Final Nagwa Technologies.xlsx"
+            file={inputs.finalTemplate}
+            optional
+            accept=".xlsx"
+            onFiles={(files) => void addTemplateFiles(files)}
+          />
         </div>
       </section>
 
@@ -330,7 +471,7 @@ function App() {
         <div className="card">
           <h2>Run Log</h2>
           <ol className="steps">
-            {["extend_nagwa_technologies.py", "fill_attendance.py", "extend_final_nagwa_technologies.py", "complete_final.py"].map((step, index) => (
+            {["extend_nagwa_technologies", "fill_attendance", "extend_final_nagwa_technologies", "complete_final"].map((step, index) => (
               <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/4 {step}</li>
             ))}
           </ol>
