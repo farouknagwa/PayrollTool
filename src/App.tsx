@@ -548,9 +548,15 @@ function App() {
               <button type="button" onClick={addAbbreviation}>Add abbreviation</button>
             </section>
           </div>
-          <div className="button-row">
-            <button type="button" onClick={resetAllSettings}>Reset to standard settings</button>
-            <button type="button" onClick={() => updateSettings(cloneDefaultSettings())}>Reload standard settings</button>
+          <div className="settings-reset-actions">
+            <div className="reset-action-card">
+              <button type="button" onClick={resetAllSettings}>Reset to standard settings</button>
+              <p>Use this when you want to start over. It restores all rule settings and updates the current permission cutoff field.</p>
+            </div>
+            <div className="reset-action-card">
+              <button type="button" onClick={() => updateSettings(cloneDefaultSettings())}>Reload standard settings</button>
+              <p>Use this to restore the rule tables only. The current permission-preparation controls stay as they are.</p>
+            </div>
           </div>
           {validationErrors.length > 0 && (
             <ul className="validation">
