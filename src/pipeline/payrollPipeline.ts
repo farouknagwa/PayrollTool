@@ -47,6 +47,18 @@ function nowLog(step: string, message: string, level: RunLogEntry["level"] = "in
   return { at: new Date().toISOString(), step, level, message };
 }
 
+function metricMessage(metric: StepMetrics): string {
+  const parts: string[] = [];
+  if (typeof metric.filled === "number") parts.push(`${metric.filled} filled`);
+  if (typeof metric.appended === "number") parts.push(`${metric.appended} appended`);
+  if (typeof metric.adjusted === "number") parts.push(`${metric.adjusted} adjusted`);
+  if (typeof metric.blank === "number") parts.push(`${metric.blank} blank`);
+  if (typeof metric.skippedCode === "number") parts.push(`${metric.skippedCode} skipped by employee code`);
+  if (typeof metric.skippedDate === "number") parts.push(`${metric.skippedDate} skipped by date`);
+  if (metric.warnings && metric.warnings.length > 0) parts.push(`${metric.warnings.length} warnings`);
+  return `${metric.step}: ${parts.length > 0 ? parts.join(", ") : "completed"}`;
+}
+
 function isWeekend(date: ISODate): boolean {
   const day = parseISODate(date).getDay();
   return day === 5 || day === 6;
@@ -402,7 +414,7 @@ export async function runPayrollPipeline(
   ];
   metrics.push(...fillSteps);
   for (const metric of fillSteps) {
-    log(nowLog("fill_attendance", `${metric.step}: ${JSON.stringify(metric)}`));
+    log(nowLog("fill_attendance", metricMessage(metric)));
     for (const warning of metric.warnings ?? []) log(nowLog("fill_attendance", warning, "warn"));
   }
 

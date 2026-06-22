@@ -25,6 +25,18 @@ function formatLog(entry: RunLogEntry): string {
   return `${new Date(entry.at).toLocaleTimeString()}  ${entry.step}  ${entry.message}`;
 }
 
+function formatMetric(metric: StepMetrics): string {
+  const parts: string[] = [];
+  if (typeof metric.filled === "number") parts.push(`${metric.filled} filled`);
+  if (typeof metric.appended === "number") parts.push(`${metric.appended} appended`);
+  if (typeof metric.adjusted === "number") parts.push(`${metric.adjusted} adjusted`);
+  if (typeof metric.blank === "number") parts.push(`${metric.blank} blank`);
+  if (typeof metric.skippedCode === "number") parts.push(`${metric.skippedCode} skipped by employee code`);
+  if (typeof metric.skippedDate === "number") parts.push(`${metric.skippedDate} skipped by date`);
+  if (typeof metric.warnings?.length === "number" && metric.warnings.length > 0) parts.push(`${metric.warnings.length} warnings`);
+  return parts.length > 0 ? parts.join(", ") : "completed";
+}
+
 function TextInput(props: {
   label: string;
   value: string | number;
@@ -198,6 +210,55 @@ function App() {
     const defaults = resetSettings();
     setSettings(defaults);
     setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: defaults.requestCutoffDaysDefault }));
+  }
+
+  function updateHourReduction(index: number, field: "employeeCode" | "startDate" | "endDate", value: string) {
+    const next = [...settings.hourReductionWindows];
+    next[index] = {
+      ...next[index],
+      [field]: field === "employeeCode" ? Number(value) : value === "" ? null : value,
+    };
+    updateSettings({ ...settings, hourReductionWindows: next });
+  }
+
+  function addHourReduction() {
+    updateSettings({
+      ...settings,
+      hourReductionWindows: [
+        ...settings.hourReductionWindows,
+        { employeeCode: 0, startDate: null, endDate: null },
+      ],
+    });
+  }
+
+  function removeHourReduction(index: number) {
+    updateSettings({
+      ...settings,
+      hourReductionWindows: settings.hourReductionWindows.filter((_, rowIndex) => rowIndex !== index),
+    });
+  }
+
+  function updateAbbreviation(oldLabel: string, nextLabel: string, nextCode: string) {
+    const next = { ...settings.abbreviations };
+    delete next[oldLabel];
+    if (nextLabel.trim()) next[nextLabel] = nextCode;
+    updateSettings({ ...settings, abbreviations: next });
+  }
+
+  function addAbbreviation() {
+    let label = "new leave type";
+    let counter = 2;
+    while (settings.abbreviations[label] !== undefined) {
+      label = `new leave type ${counter}`;
+      counter += 1;
+    }
+    updateSettings({ ...settings, abbreviations: { ...settings.abbreviations, [label]: "" } });
+  }
+
+  function removeAbbreviation(label: string) {
+    const next = { ...settings.abbreviations };
+    delete next[label];
+    updateSettings({ ...settings, abbreviations: next });
   }
 
   return (
@@ -399,6 +460,7 @@ function App() {
           <div className="rule-columns">
             <section>
               <h3>Schedule Types</h3>
+              <p className="helper-text">These names come from the Schedule column in the employee template. The time is the latest time that counts toward attendance.</p>
               {Object.entries(settings.scheduleWindowEnd).map(([name, value]) => (
                 <div className="inline-row" key={name}>
                   <input value={name} readOnly />
@@ -410,54 +472,85 @@ function App() {
 
             <section>
               <h3>Special-Rule Pairs</h3>
+              <p className="helper-text">
+                Employee A is restricted in the first payroll cycle starting from the “First cycle starts” date. Employee B is restricted in the next cycle, then they alternate every cycle.
+              </p>
               {settings.specialRulePairs.map((pair, index) => (
-                <div className="inline-row" key={`${pair.employeeA}-${pair.employeeB}-${pair.anchorDate}`}>
-                  <input type="number" value={pair.employeeA} onChange={(event) => {
+                <div className="editable-card" key={`${pair.employeeA}-${pair.employeeB}-${pair.anchorDate}`}>
+                  <TextInput label="Employee A" type="number" value={pair.employeeA} onChange={(value) => {
                     const next = [...settings.specialRulePairs];
-                    next[index] = { ...pair, employeeA: Number(event.target.value) };
+                    next[index] = { ...pair, employeeA: Number(value) };
                     updateSettings({ ...settings, specialRulePairs: next });
                   }} />
-                  <input type="number" value={pair.employeeB} onChange={(event) => {
+                  <TextInput label="Employee B" type="number" value={pair.employeeB} onChange={(value) => {
                     const next = [...settings.specialRulePairs];
-                    next[index] = { ...pair, employeeB: Number(event.target.value) };
+                    next[index] = { ...pair, employeeB: Number(value) };
                     updateSettings({ ...settings, specialRulePairs: next });
                   }} />
-                  <input type="date" value={pair.anchorDate} onChange={(event) => {
+                  <TextInput label="First cycle starts" type="date" value={pair.anchorDate} onChange={(value) => {
                     const next = [...settings.specialRulePairs];
-                    next[index] = { ...pair, anchorDate: event.target.value as PayrollSettings["specialRulePairs"][number]["anchorDate"] };
+                    next[index] = { ...pair, anchorDate: value as PayrollSettings["specialRulePairs"][number]["anchorDate"] };
                     updateSettings({ ...settings, specialRulePairs: next });
                   }} />
+                  <button type="button" className="secondary-action" onClick={() => {
+                    const next = [...settings.specialRulePairs];
+                    next[index] = { ...pair, employeeA: pair.employeeB, employeeB: pair.employeeA };
+                    updateSettings({ ...settings, specialRulePairs: next });
+                  }}>
+                    ↔ Swap A/B
+                  </button>
                 </div>
               ))}
               <button type="button" onClick={() => updateSettings({ ...settings, specialRulePairs: [...settings.specialRulePairs, { employeeA: 0, employeeB: 0, anchorDate: "2026-02-21" }] })}>Add pair</button>
             </section>
           </div>
 
-          <div className="json-editors">
-            <label>
-              Hour-reduction windows JSON
-              <textarea value={JSON.stringify(settings.hourReductionWindows, null, 2)} onChange={(event) => {
-                try {
-                  updateSettings({ ...settings, hourReductionWindows: JSON.parse(event.target.value) as PayrollSettings["hourReductionWindows"] });
-                } catch {
-                  setError("Hour-reduction JSON is invalid.");
-                }
-              }} />
-            </label>
-            <label>
-              Abbreviations JSON
-              <textarea value={JSON.stringify(settings.abbreviations, null, 2)} onChange={(event) => {
-                try {
-                  updateSettings({ ...settings, abbreviations: JSON.parse(event.target.value) as PayrollSettings["abbreviations"] });
-                } catch {
-                  setError("Abbreviations JSON is invalid.");
-                }
-              }} />
-            </label>
+          <div className="friendly-tables">
+            <section>
+              <h3>Hour-Reduction Employees</h3>
+              <p className="helper-text">Use this when an employee gets 1 hour deducted from daily shortage during a date range. Leave Start or End empty for an open range.</p>
+              <div className="editable-table">
+                <div className="table-head four-cols">
+                  <span>Employee Code</span>
+                  <span>Start Date</span>
+                  <span>End Date</span>
+                  <span>Action</span>
+                </div>
+                {settings.hourReductionWindows.map((window, index) => (
+                  <div className="table-row four-cols" key={`${window.employeeCode}-${index}`}>
+                    <input type="number" value={window.employeeCode} onChange={(event) => updateHourReduction(index, "employeeCode", event.target.value)} />
+                    <input type="date" value={window.startDate ?? ""} onChange={(event) => updateHourReduction(index, "startDate", event.target.value)} />
+                    <input type="date" value={window.endDate ?? ""} onChange={(event) => updateHourReduction(index, "endDate", event.target.value)} />
+                    <button type="button" className="secondary-action" onClick={() => removeHourReduction(index)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={addHourReduction}>Add employee</button>
+            </section>
+
+            <section>
+              <h3>Final Report Abbreviations</h3>
+              <p className="helper-text">When the final report sees a long leave label, it writes the short code here. Matching ignores uppercase/lowercase and extra spaces.</p>
+              <div className="editable-table">
+                <div className="table-head three-cols">
+                  <span>Leave Label</span>
+                  <span>Short Code</span>
+                  <span>Action</span>
+                </div>
+                {Object.entries(settings.abbreviations).map(([label, code], index) => (
+                  <div className="table-row three-cols" key={`${index}-${label}`}>
+                    <input value={label} onChange={(event) => updateAbbreviation(label, event.target.value, code)} />
+                    <input value={code} onChange={(event) => updateAbbreviation(label, label, event.target.value)} />
+                    <button type="button" className="secondary-action" onClick={() => removeAbbreviation(label)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={addAbbreviation}>Add abbreviation</button>
+            </section>
           </div>
           <div className="button-row">
-            <button type="button" onClick={resetAllSettings}>Reset to Python defaults</button>
-            <button type="button" onClick={() => updateSettings(cloneDefaultSettings())}>Load defaults without storage reset</button>
+            <button type="button" onClick={resetAllSettings}>Reset to standard settings</button>
+            <button type="button" onClick={() => updateSettings(cloneDefaultSettings())}>Reload standard settings</button>
           </div>
           {validationErrors.length > 0 && (
             <ul className="validation">
@@ -493,7 +586,7 @@ function App() {
             <p>Outputs will appear after a successful run.</p>
           )}
           <div className="metrics">
-            {metrics.map((metric) => <code key={metric.step}>{metric.step}: {JSON.stringify(metric)}</code>)}
+            {metrics.map((metric) => <p key={metric.step}><strong>{metric.step}</strong>: {formatMetric(metric)}</p>)}
           </div>
         </div>
       </section>
