@@ -6,7 +6,11 @@ import completeFinalSource from "../py/complete_final.py?raw";
 import preparePermissionSource from "../py/prepare_permission_report.py?raw";
 
 type PyodideLoadModule = {
-  loadPyodide: (options: { indexURL: string }) => Promise<Pyodide>;
+  loadPyodide: (options: { indexURL: string; createPyodideModule?: unknown }) => Promise<Pyodide>;
+};
+
+type PyodideAsmModule = {
+  default: unknown;
 };
 
 type Pyodide = {
@@ -90,12 +94,13 @@ function postLog(step: string, message: string, level = levelFromLine(message)) 
   post({ type: "log", entry });
 }
 
-async function importPyodideLoader(): Promise<{ module: PyodideLoadModule; indexURL: string }> {
+async function importPyodideLoader(): Promise<{ module: PyodideLoadModule; createPyodideModule: unknown; indexURL: string }> {
   let lastError: unknown;
   for (const url of PYODIDE_MODULE_URLS) {
     try {
       const module = await import(/* @vite-ignore */ url) as PyodideLoadModule;
-      return { module, indexURL: url.replace(/pyodide\.mjs$/, "") };
+      const asmModule = await import(/* @vite-ignore */ url.replace(/pyodide\.mjs$/, "pyodide.asm.mjs")) as PyodideAsmModule;
+      return { module, createPyodideModule: asmModule.default, indexURL: url.replace(/pyodide\.mjs$/, "") };
     } catch (error) {
       lastError = error;
     }
@@ -107,8 +112,8 @@ async function getPyodide(): Promise<Pyodide> {
   if (pyodidePromise) return pyodidePromise;
   pyodidePromise = (async () => {
     postStatus("Loading Python engine. First load can take a few minutes; later runs use the browser cache.");
-    const { module, indexURL } = await importPyodideLoader();
-    const pyodide = await module.loadPyodide({ indexURL });
+    const { module, createPyodideModule, indexURL } = await importPyodideLoader();
+    const pyodide = await module.loadPyodide({ indexURL, createPyodideModule });
     pyodide.setStdout({
       batched: (line) => postLog(currentStep, line),
     });

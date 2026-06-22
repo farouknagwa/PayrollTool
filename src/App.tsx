@@ -191,6 +191,14 @@ function App() {
     setInputs((prev) => ({ ...prev, ...mapped }));
   }
 
+  function addStandalonePermissionFiles(fileList: FileList | File[]) {
+    const [file] = Array.from(fileList);
+    if (!file) return;
+    setStandalonePermissionFile(file);
+    setStandaloneSummary("");
+    setError("");
+  }
+
   function updateSettings(next: PayrollSettings) {
     setSettings(next);
     saveSettings(next);
@@ -449,13 +457,21 @@ function App() {
           </div>
         </div>
 
-        <div className="card">
+        <div
+          className="card"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            addStandalonePermissionFiles(event.dataTransfer.files);
+          }}
+        >
           <h2>Prepare Permissions Only</h2>
           <p>Use this when HR only needs to convert `Nagwa_Permission_Request_Report` into the prepared permission-details report.</p>
-          <input
-            type="file"
-            accept=".xls,.xlsx"
-            onChange={(event) => setStandalonePermissionFile(event.target.files?.[0] ?? null)}
+          <UploadTile
+            title="Raw Permission Request Report"
+            description="Required: Nagwa_Permission_Request_Report.xls or .xlsx"
+            file={standalonePermissionFile ?? undefined}
+            onFiles={addStandalonePermissionFiles}
           />
           <div className="controls">
             <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
