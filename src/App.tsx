@@ -455,6 +455,26 @@ function App() {
             <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
             <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
           </div>
+          {permissionMode(inputs) === "raw" && (
+            <div className="permission-options">
+              <p className="helper-text">
+                A raw `Nagwa_Permission_Request_Report` was uploaded, so the pipeline will prepare it first. These options control that preparation step.
+              </p>
+              <div className="controls">
+                <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
+                <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
+                <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={permissionOptions.noRequestCutoff}
+                    onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
+                  />
+                  No request cutoff
+                </label>
+              </div>
+            </div>
+          )}
         </div>
 
         <div

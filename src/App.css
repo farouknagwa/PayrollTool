@@ -182,6 +182,18 @@
   color: var(--muted);
 }
 
+.permission-options {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
+.permission-options .helper-text {
+  margin-top: 0;
+}
+
 .field {
   display: grid;
   gap: 6px;
