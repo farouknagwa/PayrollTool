@@ -583,7 +583,6 @@ function App() {
             <TextInput label="Lunch before end" value={settings.lunchWindowBefore.end} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, end: value } })} />
             <TextInput label="Lunch from start" value={settings.lunchWindowFrom.start} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, start: value } })} />
             <TextInput label="Lunch from end" value={settings.lunchWindowFrom.end} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, end: value } })} />
-            <TextInput label="Default request cutoff" type="number" value={settings.requestCutoffDaysDefault} onChange={(value) => updateSettings({ ...settings, requestCutoffDaysDefault: Number(value) })} />
             <label className="toggle field">
               <input type="checkbox" checked={settings.debugMode} onChange={(event) => updateSettings({ ...settings, debugMode: event.target.checked })} />
               Debug mode
@@ -684,7 +683,7 @@ function App() {
           <div className="settings-reset-actions">
             <div className="reset-action-card">
               <button type="button" onClick={resetAllSettings}>Restore default settings</button>
-              <p>Use this to return all payroll rules and the permission cutoff to the standard values shipped with the tool.</p>
+              <p>Use this to return all payroll rules to the standard values shipped with the tool.</p>
             </div>
           </div>
           {validationErrors.length > 0 && (
