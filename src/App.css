@@ -182,8 +182,20 @@
   color: var(--muted);
 }
 
-.permission-options {
+.permission-input {
   margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--accent-soft);
+}
+
+.permission-input h3 {
+  margin-bottom: 6px;
+}
+
+.permission-options {
+  margin-top: 16px;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 16px;

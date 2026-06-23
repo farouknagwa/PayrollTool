@@ -431,9 +431,10 @@ function App() {
               onFiles={(files) => void addFiles(files)}
             />
             <UploadTile
-              title="Permissions"
-              description="Required: prepared details or raw request report"
-              file={inputs.preparedPermissions ?? inputs.rawPermissions}
+              title="Permissions (alternate)"
+              description="Optional: permissions.xls (alternate permissions file)"
+              file={inputs.alternatePermissions}
+              optional
               onFiles={(files) => void addFiles(files)}
             />
             <UploadTile
@@ -451,30 +452,44 @@ function App() {
               onFiles={(files) => void addFiles(files)}
             />
           </div>
+
+          <div className="permission-input">
+            <h3>Permission Request</h3>
+            <p className="helper-text">
+              Upload the prepared details file, or the raw request report — the pipeline prepares the raw report automatically before running.
+            </p>
+            <UploadTile
+              title="Permission details or raw report"
+              description="Required: Nagwa_Permission_Request_permission_details.xls (prepared) or Nagwa_Permission_Request_Report.xls (raw)"
+              file={inputs.preparedPermissions ?? inputs.rawPermissions}
+              onFiles={(files) => void addFiles(files)}
+            />
+            {permissionMode(inputs) === "raw" && (
+              <div className="permission-options">
+                <p className="helper-text">
+                  A raw `Nagwa_Permission_Request_Report` was uploaded, so the pipeline will prepare it first. These options control that preparation step.
+                </p>
+                <div className="controls">
+                  <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
+                  <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
+                  <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={permissionOptions.noRequestCutoff}
+                      onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
+                    />
+                    No request cutoff
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="meta-row">
             <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
             <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
           </div>
-          {permissionMode(inputs) === "raw" && (
-            <div className="permission-options">
-              <p className="helper-text">
-                A raw `Nagwa_Permission_Request_Report` was uploaded, so the pipeline will prepare it first. These options control that preparation step.
-              </p>
-              <div className="controls">
-                <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
-                <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
-                <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={permissionOptions.noRequestCutoff}
-                    onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
-                  />
-                  No request cutoff
-                </label>
-              </div>
-            </div>
-          )}
         </div>
 
         <div
