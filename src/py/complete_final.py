@@ -59,6 +59,22 @@ TARGET_LAST_DATE_COL = 39   # column AM
 TARGET_TOTAL_COL = 40       # column AN ('Total')
 
 
+def effective_last_employee_row(sheet, first_row: int, id_col: int = 1) -> int:
+    """Return the last employee row, ignoring formatting-only trailing rows."""
+    last = first_row - 1
+    blank_run = 0
+    for row in range(first_row, sheet.max_row + 1):
+        if sheet.cell(row, id_col).value is None:
+            if last >= first_row:
+                blank_run += 1
+                if blank_run >= 50:
+                    break
+            continue
+        last = row
+        blank_run = 0
+    return max(last, first_row - 1)
+
+
 ABBREVIATIONS: Dict[str, str] = {
     "absent": "A",
     "unpaid leave": "UL",
@@ -206,7 +222,8 @@ def build_source_date_maps(sheet) -> tuple[Dict[date, int], Dict[date, int]]:
 def build_source_id_row_map(sheet) -> Dict[int, int]:
     """Map employee ID -> row number in the source sheet."""
     out: Dict[int, int] = {}
-    for r in range(SOURCE_FIRST_DATA_ROW, sheet.max_row + 1):
+    last_row = effective_last_employee_row(sheet, SOURCE_FIRST_DATA_ROW)
+    for r in range(SOURCE_FIRST_DATA_ROW, last_row + 1):
         v = sheet.cell(r, 1).value
         try:
             emp_id = int(v)
@@ -229,7 +246,8 @@ def build_target_date_col_map(sheet) -> Dict[date, int]:
 def build_target_id_row_map(sheet) -> Dict[int, int]:
     """Map employee ID -> row number in the target sheet."""
     out: Dict[int, int] = {}
-    for r in range(TARGET_FIRST_DATA_ROW, sheet.max_row + 1):
+    last_row = effective_last_employee_row(sheet, TARGET_FIRST_DATA_ROW)
+    for r in range(TARGET_FIRST_DATA_ROW, last_row + 1):
         v = sheet.cell(r, 1).value
         try:
             emp_id = int(v)

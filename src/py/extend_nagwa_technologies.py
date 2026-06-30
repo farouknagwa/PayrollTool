@@ -26,6 +26,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import tempfile
+from zipfile import ZipFile, ZIP_DEFLATED
 from copy import copy
 from datetime import date, datetime, timedelta
 
@@ -101,6 +104,128 @@ def daterange(start: date, end: date):
 def is_egypt_weekend(d: date) -> bool:
     """Friday = 4, Saturday = 5 in datetime.weekday() (Monday = 0)."""
     return d.weekday() in (4, 5)
+
+
+def effective_last_employee_row(sheet, first_row: int = 4, id_col: int = 1) -> int:
+    """Return the last employee row, ignoring template-only formatted rows.
+
+    Some templates carry formatting down to thousands of blank rows. Iterating
+    over those rows is very slow in the browser, so stop after a reasonable
+    blank run once the contiguous employee block has ended.
+    """
+    last = first_row - 1
+    blank_run = 0
+    for row in range(first_row, sheet.max_row + 1):
+        if sheet.cell(row, id_col).value is None:
+            if last >= first_row:
+                blank_run += 1
+                if blank_run >= 50:
+                    break
+            continue
+        last = row
+        blank_run = 0
+    return max(last, first_row - 1)
+
+
+def trim_formatting_only_rows(sheet, last_row: int) -> None:
+    """Drop worksheet cell records beyond the employee block without shifting rows."""
+    for coord in [coord for coord in sheet._cells if coord[0] > last_row]:
+        del sheet._cells[coord]
+    for row_index in [row for row in sheet.row_dimensions if row > last_row]:
+        del sheet.row_dimensions[row_index]
+
+
+ROW_RE = re.compile(rb"<row\b[^>]*\br=\"(\d+)\"[^>]*>.*?</row>")
+
+
+def row_has_column_value(row_xml: bytes, row_num: int, col_letter: str = "A") -> bool:
+    cell_re = re.compile(
+        rb"<c\b[^>]*\br=\"" + col_letter.encode("ascii") + str(row_num).encode("ascii") + rb"\"[^>]*>(.*?)</c>"
+    )
+    match = cell_re.search(row_xml)
+    if not match:
+        return False
+    body = match.group(1)
+    return b"<v>" in body or b"<is>" in body
+
+
+def compact_template_rows(path: str, first_row: int = 4) -> str:
+    """Create a compact copy of the workbook without formatting-only tail rows."""
+    with ZipFile(path, "r") as source:
+        sheet_name = "xl/worksheets/sheet1.xml"
+        if sheet_name not in source.namelist():
+            return path
+        sheet_xml = source.read(sheet_name)
+
+        last_employee_row = first_row - 1
+        blank_run = 0
+        for match in ROW_RE.finditer(sheet_xml):
+            row_num = int(match.group(1))
+            if row_num < first_row:
+                continue
+            if row_has_column_value(match.group(0), row_num):
+                last_employee_row = row_num
+                blank_run = 0
+            elif last_employee_row >= first_row:
+                blank_run += 1
+                if blank_run >= 50:
+                    break
+
+        if last_employee_row < first_row:
+            return path
+
+        rows = []
+        max_seen_row = 0
+        for match in ROW_RE.finditer(sheet_xml):
+            row_num = int(match.group(1))
+            max_seen_row = max(max_seen_row, row_num)
+            if row_num < first_row or row_num <= last_employee_row:
+                rows.append(match.group(0))
+
+        if max_seen_row <= last_employee_row:
+            return path
+
+        sheet_data_match = re.search(rb"(<sheetData>).*?(</sheetData>)", sheet_xml)
+        if not sheet_data_match:
+            return path
+
+        compact_xml = (
+            sheet_xml[: sheet_data_match.start()]
+            + sheet_data_match.group(1)
+            + b"".join(rows)
+            + sheet_data_match.group(2)
+            + sheet_xml[sheet_data_match.end() :]
+        )
+
+        def replace_dimension(match):
+            ref = match.group(2).decode("ascii")
+            end_ref = ref.split(":")[-1]
+            end_col_match = re.match(r"([A-Z]+)", end_ref)
+            end_col = end_col_match.group(1) if end_col_match else "A"
+            return (
+                match.group(1)
+                + f"A1:{end_col}{last_employee_row}".encode("ascii")
+                + match.group(3)
+            )
+
+        compact_xml = re.sub(
+            rb"(<dimension ref=\")([^\"]+)(\"/?>)",
+            replace_dimension,
+            compact_xml,
+            count=1,
+        )
+
+        fd, compact_path = tempfile.mkstemp(suffix=".xlsx")
+        os.close(fd)
+        with ZipFile(compact_path, "w", ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                data = compact_xml if item.filename == sheet_name else source.read(item.filename)
+                target.writestr(item, data)
+        print(
+            f"  Compacted template rows from {max_seen_row} to {last_employee_row}.",
+            flush=True,
+        )
+        return compact_path
 
 
 # ----------------------------------------------------------------------
@@ -242,14 +367,18 @@ def replace_calendar_period(
 ) -> None:
     start_date, end_date = compute_period(ref_date)
 
-    wb = load_workbook(path)
+    compact_path = compact_template_rows(path)
+    wb = load_workbook(compact_path)
     if "Nagwa Technologies" not in wb.sheetnames:
         raise SystemExit(
             f"Sheet 'Nagwa Technologies' not found in {path!r}. "
             f"Available sheets: {wb.sheetnames}"
         )
     sheet = wb["Nagwa Technologies"]
-    max_row = sheet.max_row
+    max_row = effective_last_employee_row(sheet)
+    print(f"  Rebuilding date area through employee row {max_row}.", flush=True)
+    if sheet.max_row > max_row:
+        trim_formatting_only_rows(sheet, max_row)
 
     # 1. Capture prototype styles from the existing template BEFORE clearing.
     weekday_proto = [

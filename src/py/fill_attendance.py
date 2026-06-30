@@ -300,10 +300,27 @@ def build_single_date_column_map(sheet, date_col_map):
     return single_map
 
 
+def effective_last_employee_row(sheet, first_row=4, id_col=1):
+    """Return the last employee row, ignoring formatting-only trailing rows."""
+    last = first_row - 1
+    blank_run = 0
+    for row in range(first_row, sheet.max_row + 1):
+        if sheet.cell(row, id_col).value is None:
+            if last >= first_row:
+                blank_run += 1
+                if blank_run >= 50:
+                    break
+            continue
+        last = row
+        blank_run = 0
+    return max(last, first_row - 1)
+
+
 def build_code_row_map(sheet):
     """Build a dict: employee_code (int) -> row number in the Nagwa sheet."""
     code_row_map = {}
-    for r in range(4, sheet.max_row + 1):
+    last_row = effective_last_employee_row(sheet)
+    for r in range(4, last_row + 1):
         code = sheet.cell(r, 1).value
         if code is not None:
             code_row_map[int(code)] = r
@@ -396,9 +413,11 @@ def fill_absences(sheet, date_col_map, code_row_map):
         nagwa_row = code_row_map[emp_code]
         in_col = date_col_map[abs_date]
         out_col = in_col + 1
+        shortage_col = in_col + 3
 
         sheet.cell(nagwa_row, in_col).value = "absent"
         sheet.cell(nagwa_row, out_col).value = "absent"
+        sheet.cell(nagwa_row, shortage_col).value = "absent"
         filled += 1
 
     print(f"\nAbsences done! {filled} day-cells filled.")
@@ -1399,13 +1418,13 @@ def apply_hour_reduction(sheet, date_col_map, code_row_map):
 
 def fill_missing_punches(sheet, date_col_map, code_row_map):
     """Final sweep: where exactly one of in/out is empty but the other holds a
-    real punch time, mark the empty side and the shortage as 'Missing Punch'.
+    real punch time, treat the day as absent.
 
-    Cells already containing non-time labels (e.g. 'absent', 'Public Holiday',
-    'Resigned', a vacation type, or 'Missing Punch') are left untouched, since
-    those represent a known status rather than a missing punch.
+    Earlier leave-rule steps may also mark a row as 'Missing Punch'. Those
+    cases are normalized to 'absent' here so the final report receives the
+    standard A flag.
     """
-    print("\nScanning for missing punches...")
+    print("\nScanning for missing punches to mark as absences...")
     filled = 0
 
     for emp_code, nagwa_row in code_row_map.items():
@@ -1418,6 +1437,14 @@ def fill_missing_punches(sheet, date_col_map, code_row_map):
 
             in_str = "" if in_val is None else str(in_val).strip()
             out_str = "" if out_val is None else str(out_val).strip()
+            shortage_str = "" if sheet.cell(nagwa_row, shortage_col).value is None else str(sheet.cell(nagwa_row, shortage_col).value).strip()
+
+            if "Missing Punch" in (in_str, out_str, shortage_str):
+                sheet.cell(nagwa_row, in_col).value = "absent"
+                sheet.cell(nagwa_row, out_col).value = "absent"
+                sheet.cell(nagwa_row, shortage_col).value = "absent"
+                filled += 1
+                continue
 
             in_blank = in_str in ("", "nan", "None")
             out_blank = out_str in ("", "nan", "None")
@@ -1428,16 +1455,16 @@ def fill_missing_punches(sheet, date_col_map, code_row_map):
             if in_blank:
                 if parse_time_value(out_str) is None:
                     continue
-                sheet.cell(nagwa_row, in_col).value = "Missing Punch"
             else:
                 if parse_time_value(in_str) is None:
                     continue
-                sheet.cell(nagwa_row, out_col).value = "Missing Punch"
 
-            sheet.cell(nagwa_row, shortage_col).value = "Missing Punch"
+            sheet.cell(nagwa_row, in_col).value = "absent"
+            sheet.cell(nagwa_row, out_col).value = "absent"
+            sheet.cell(nagwa_row, shortage_col).value = "absent"
             filled += 1
 
-    print(f"Missing punch sweep done! {filled} cell-pair(s) marked.")
+    print(f"Missing punch absence sweep done! {filled} day-cell(s) marked absent.")
 
 
 def apply_wfh_and_workday_overrides(sheet, date_col_map, code_row_map):
