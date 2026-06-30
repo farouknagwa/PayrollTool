@@ -9,6 +9,7 @@ describe("input file mapping", () => {
   it("requires the two private templates for parity output", () => {
     expect(missingRequiredInputs({})).toContain("Nagwa Technologies.xlsx template");
     expect(missingRequiredInputs({})).toContain("Final Nagwa Technologies.xlsx template");
+    expect(missingRequiredInputs({})).toContain("Public Holiday.xls[x]");
   });
 
   it("maps the expected report and template basenames", () => {

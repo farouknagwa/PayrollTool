@@ -239,12 +239,21 @@ def transform_report(
             "Effective Date skipped."
         )
 
+    cancel_mask = working["Transaction Type"].astype(str).str.contains(
+        "cancel", case=False, na=False
+    )
+    cancelled_excluded = int(cancel_mask.sum())
+
     mask = (
         working["_effective_date"].notna()
         & (working["_effective_date"] >= start_date)
         & (working["_effective_date"] <= end_date)
         & (working["Status"].astype(str).str.strip() == "Approved")
+        & ~cancel_mask
     )
+
+    if cancelled_excluded:
+        print(f"  Cancelled request rows excluded: {cancelled_excluded}.")
 
     request_excluded = 0
     if request_cutoff_days is not None:

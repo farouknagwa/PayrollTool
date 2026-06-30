@@ -72,8 +72,8 @@ export function fileChecklist(inputs: PayrollInputFiles): Array<{ label: string;
     },
     {
       label: "Public Holiday",
-      state: inputs.publicHoliday ? "found" : "optional",
-      detail: inputs.publicHoliday?.name ?? "Optional; skipped if missing",
+      state: inputs.publicHoliday ? "found" : "missing",
+      detail: inputs.publicHoliday?.name ?? "Required: Public Holiday.xls or .xlsx",
     },
   ];
 }
@@ -83,6 +83,7 @@ export function missingRequiredInputs(inputs: PayrollInputFiles): string[] {
   if (!inputs.attendance) missing.push("Attendance Report.xls[x]");
   if (!inputs.absences) missing.push("Absence Report.xls[x]");
   if (!inputs.vacations) missing.push("Employee Transactions_vacations.xls[x]");
+  if (!inputs.publicHoliday) missing.push("Public Holiday.xls[x]");
   if (!inputs.preparedPermissions && !inputs.rawPermissions) {
     missing.push("Nagwa_Permission_Request_permission_details.xls[x] or Nagwa_Permission_Request_Report.xls[x]");
   }

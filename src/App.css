@@ -182,6 +182,50 @@
   color: var(--muted);
 }
 
+.hero-meta {
+  color: #dbeafe;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+}
+
+.tabs button {
+  flex: 1 1 150px;
+  background: #f8fafc;
+}
+
+.tabs button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.tab-panel {
+  margin-top: 18px;
+}
+
+.missing-list {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #fecaca;
+  border-radius: 16px;
+  background: #fff1f2;
+  color: var(--danger);
+}
+
+.missing-list ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
 .permission-input {
   margin-top: 18px;
   padding: 16px;

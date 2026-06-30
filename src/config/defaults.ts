@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: PayrollSettings = {
     { employeeCode: 514, startDate: "2025-03-09", endDate: "2026-04-07" },
     { employeeCode: 2148, startDate: "2024-09-18", endDate: "2026-06-20" },
     { employeeCode: 350, startDate: "2025-08-03", endDate: "2026-10-27" },
-    { employeeCode: 1809, startDate: null, endDate: "2026-11-01" },
+    { employeeCode: 1809, startDate: "2025-08-03", endDate: "2026-11-01" },
     { employeeCode: 822, startDate: "2025-03-10", endDate: "2026-12-10" },
     { employeeCode: 315, startDate: "2025-09-07", endDate: "2027-06-06" },
   ],
@@ -54,7 +54,7 @@ export const DEFAULT_SETTINGS: PayrollSettings = {
     "work from home": "WFH",
   },
   requestCutoffDaysDefault: 0,
-  debugMode: false,
+  debugMode: true,
 };
 
 export const REQUIRED_BASENAMES = {
@@ -77,13 +77,3 @@ export const TEMPLATE_BASENAMES = {
   finalTemplate: "Final Nagwa Technologies",
 } as const;
 
-export const GOTCHA_MESSAGES = [
-  "Pipeline order is critical: WFH/Workday override always runs last.",
-  "Permitted delays are skipped when a half-day leave exists on the same day.",
-  "Missing Punch sweep ignores known status labels such as absent, Public Holiday, Resigned, and vacation types.",
-  "Multiple permissions on the same day are joined with \" | \" in the Leave column.",
-  "Workday takes priority over Work from Home when both keywords are present.",
-  "File names must match exact basenames; the resolver tries .xlsx first, then .xls.",
-  "If detected period differs from selected month, the Attendance Report period controls the full payroll pipeline.",
-  "Final Total = 0 is normal when all daily cells are text labels rather than durations.",
-];

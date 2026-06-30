@@ -1,19 +1,19 @@
 import { useMemo, useRef, useState } from "react";
 import { saveAs } from "file-saver";
 import "./App.css";
-import { GOTCHA_MESSAGES } from "./config/defaults";
 import { loadSettings, resetSettings, saveSettings, validateSettings } from "./config/storage";
 import { computePeriod } from "./core/dateTime";
 import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
-import { mapInputFiles, missingRequiredInputs, permissionMode } from "./io/files";
+import { missingRequiredInputs, permissionMode } from "./io/files";
 import { detectAttendancePeriodDate, readWorkbook } from "./io/excel";
 
 type WorkerResponse =
   | { type: "status"; message: string }
   | { type: "log"; entry: RunLogEntry }
   | { type: "done"; result: PayrollRunResult }
-  | { type: "prepared"; workbook: ArrayBuffer; summary: string; logs: RunLogEntry[] }
   | { type: "error"; message: string };
+
+type AppTab = "inputs" | "settings" | "log" | "outputs";
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -52,36 +52,6 @@ function stepLabel(step: string): string {
   return labels[step] ?? step;
 }
 
-type AbbreviationRow = {
-  id: string;
-  label: string;
-  code: string;
-};
-
-let rowCounter = 0;
-
-function nextRowId(prefix: string): string {
-  rowCounter += 1;
-  return `${prefix}-${Date.now()}-${rowCounter}`;
-}
-
-function abbreviationRowsFrom(abbreviations: PayrollSettings["abbreviations"]): AbbreviationRow[] {
-  return Object.entries(abbreviations).map(([label, code], index) => ({
-    id: `abbr-${index}-${label}`,
-    label,
-    code,
-  }));
-}
-
-function abbreviationsFromRows(rows: AbbreviationRow[]): PayrollSettings["abbreviations"] {
-  const abbreviations: PayrollSettings["abbreviations"] = {};
-  for (const row of rows) {
-    const label = row.label.trim();
-    if (label) abbreviations[label] = row.code;
-  }
-  return abbreviations;
-}
-
 function TextInput(props: {
   label: string;
   value: string | number;
@@ -102,8 +72,7 @@ function UploadTile(props: {
   file?: File;
   optional?: boolean;
   accept?: string;
-  multiple?: boolean;
-  onFiles: (files: FileList | File[]) => void;
+  onFile: (file: File) => void;
 }) {
   const state = props.file ? "found" : props.optional ? "optional" : "missing";
   return (
@@ -112,7 +81,8 @@ function UploadTile(props: {
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
-        props.onFiles(event.dataTransfer.files);
+        const file = event.dataTransfer.files.item(0);
+        if (file) props.onFile(file);
       }}
     >
       <div className="upload-tile-header">
@@ -125,9 +95,9 @@ function UploadTile(props: {
         <input
           type="file"
           accept={props.accept ?? ".xls,.xlsx"}
-          multiple={props.multiple}
           onChange={(event) => {
-            if (event.target.files) props.onFiles(event.target.files);
+            const file = event.target.files?.item(0);
+            if (file) props.onFile(file);
             event.currentTarget.value = "";
           }}
         />
@@ -138,23 +108,20 @@ function UploadTile(props: {
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>("inputs");
   const [inputs, setInputs] = useState<PayrollInputFiles>({});
   const [settings, setSettings] = useState<PayrollSettings>(() => loadSettings());
-  const [abbreviationRows, setAbbreviationRows] = useState<AbbreviationRow[]>(() => abbreviationRowsFrom(loadSettings().abbreviations));
   const [permissionOptions, setPermissionOptions] = useState<PermissionPrepOptions>({
     month: currentMonth,
     year: currentYear,
     requestCutoffDays: settings.requestCutoffDaysDefault,
     noRequestCutoff: false,
   });
-  const [standalonePermissionFile, setStandalonePermissionFile] = useState<File | null>(null);
-  const [standaloneSummary, setStandaloneSummary] = useState<string>("");
   const [logs, setLogs] = useState<RunLogEntry[]>([]);
   const [metrics, setMetrics] = useState<StepMetrics[]>([]);
   const [result, setResult] = useState<PayrollRunResult | null>(null);
   const [detectedPeriod, setDetectedPeriod] = useState<string>("");
   const [running, setRunning] = useState(false);
-  const [preparingPermissions, setPreparingPermissions] = useState(false);
   const [engineStatus, setEngineStatus] = useState("");
   const [error, setError] = useState<string>("");
   const workerRef = useRef<Worker | null>(null);
@@ -162,13 +129,18 @@ function App() {
   const validationErrors = useMemo(() => validateSettings(settings), [settings]);
   const missing = useMemo(() => missingRequiredInputs(inputs), [inputs]);
 
-  async function addFiles(fileList: FileList | File[]) {
-    const files = Array.from(fileList);
-    const mapped = mapInputFiles(files);
-    setInputs((prev) => ({ ...prev, ...mapped }));
-    if (mapped.attendance) {
+  async function assignInputFile(key: keyof PayrollInputFiles, file: File) {
+    setInputs((prev) => {
+      const next = { ...prev, [key]: file };
+      if (key === "alternatePermissions" && next.preparedPermissions === undefined) {
+        next.preparedPermissions = file;
+      }
+      return next;
+    });
+    setError("");
+    if (key === "attendance") {
       try {
-        const workbook = await readWorkbook(mapped.attendance);
+        const workbook = await readWorkbook(file);
         const firstDate = detectAttendancePeriodDate(workbook);
         if (firstDate) {
           const period = computePeriod(firstDate as ISODate);
@@ -183,20 +155,6 @@ function App() {
         setError(readError instanceof Error ? readError.message : String(readError));
       }
     }
-  }
-
-  async function addTemplateFiles(fileList: FileList | File[]) {
-    const files = Array.from(fileList);
-    const mapped = mapInputFiles(files);
-    setInputs((prev) => ({ ...prev, ...mapped }));
-  }
-
-  function addStandalonePermissionFiles(fileList: FileList | File[]) {
-    const [file] = Array.from(fileList);
-    if (!file) return;
-    setStandalonePermissionFile(file);
-    setStandaloneSummary("");
-    setError("");
   }
 
   function updateSettings(next: PayrollSettings) {
@@ -215,45 +173,7 @@ function App() {
     workerRef.current?.terminate();
     workerRef.current = null;
     setRunning(false);
-    setPreparingPermissions(false);
     setEngineStatus("Stopped.");
-  }
-
-  async function preparePermissionsOnly() {
-    if (!standalonePermissionFile) {
-      setError("Upload Nagwa_Permission_Request_Report.xls[x] first.");
-      return;
-    }
-    setError("");
-    setResult(null);
-    setMetrics([]);
-    setLogs([]);
-    setPreparingPermissions(true);
-    setStandaloneSummary("Preparing permissions...");
-    const worker = getWorker();
-    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-      const message = event.data;
-      if (message.type === "status") {
-        setEngineStatus(message.message);
-      } else if (message.type === "log") {
-        setLogs((prev) => [...prev, message.entry]);
-      } else if (message.type === "prepared") {
-        downloadBuffer(message.workbook, "Nagwa_Permission_Request_permission_details.xls", "application/vnd.ms-excel");
-        setLogs(message.logs);
-        setStandaloneSummary(message.summary);
-        setPreparingPermissions(false);
-      } else if (message.type === "error") {
-        setStandaloneSummary("");
-        setError(message.message);
-        setPreparingPermissions(false);
-      }
-    };
-    worker.onerror = (event) => {
-      setStandaloneSummary("");
-      setError(event.message);
-      setPreparingPermissions(false);
-    };
-    worker.postMessage({ type: "preparePermissions", file: standalonePermissionFile, permissionOptions });
   }
 
   async function runPayroll() {
@@ -261,7 +181,6 @@ function App() {
     setResult(null);
     setMetrics([]);
     setLogs([]);
-    setStandaloneSummary("");
     if (missing.length > 0) {
       setError(`Missing required files: ${missing.join(", ")}`);
       return;
@@ -303,7 +222,6 @@ function App() {
   function resetAllSettings() {
     const defaults = resetSettings();
     setSettings(defaults);
-    setAbbreviationRows(abbreviationRowsFrom(defaults.abbreviations));
     setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: defaults.requestCutoffDaysDefault }));
   }
 
@@ -333,22 +251,12 @@ function App() {
     });
   }
 
-  function commitAbbreviationRows(nextRows: AbbreviationRow[]) {
-    setAbbreviationRows(nextRows);
-    updateSettings({ ...settings, abbreviations: abbreviationsFromRows(nextRows) });
-  }
-
-  function updateAbbreviation(id: string, field: "label" | "code", value: string) {
-    commitAbbreviationRows(abbreviationRows.map((row) => row.id === id ? { ...row, [field]: value } : row));
-  }
-
-  function addAbbreviation() {
-    commitAbbreviationRows([...abbreviationRows, { id: nextRowId("abbr"), label: "new leave type", code: "" }]);
-  }
-
-  function removeAbbreviation(id: string) {
-    commitAbbreviationRows(abbreviationRows.filter((row) => row.id !== id));
-  }
+  const tabs: Array<{ id: AppTab; label: string }> = [
+    { id: "inputs", label: "Inputs" },
+    { id: "settings", label: "Settings" },
+    { id: "log", label: "Run Log" },
+    { id: "outputs", label: "Outputs" },
+  ];
 
   return (
     <main className="app-shell">
@@ -359,12 +267,16 @@ function App() {
           <p className="lead">
             Run the Nagwa payroll pipeline in the browser. Files stay on this device; no backend, API key, or upload server is used.
           </p>
+          <div className="meta-row hero-meta">
+            <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
+            <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
+          </div>
         </div>
         <div className="hero-actions">
-          <button className="primary" type="button" onClick={runPayroll} disabled={running || preparingPermissions || missing.length > 0 || validationErrors.length > 0}>
+          <button className="primary" type="button" onClick={runPayroll} disabled={running || missing.length > 0 || validationErrors.length > 0}>
             {running ? "Running..." : "Run Payroll"}
           </button>
-          <button type="button" onClick={stopWorker} disabled={!running && !preparingPermissions}>
+          <button type="button" onClick={stopWorker} disabled={!running}>
             Stop
           </button>
         </div>
@@ -373,207 +285,87 @@ function App() {
       {error && <div className="toast error">{error}</div>}
       {engineStatus && <div className="toast info">{engineStatus}</div>}
 
-      <section className="grid two">
-        <div
-          className="card"
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            void addFiles(event.dataTransfer.files);
-          }}
-        >
-          <h2>Input Files</h2>
-          <p>Choose multiple report files, choose the whole raw-data folder, or drag and drop the folder into this box.</p>
-          <div className="bulk-upload">
-            <label className="file-button">
-              Choose Files
-              <input
-                type="file"
-                multiple
-                accept=".xls,.xlsx"
-                onChange={(event) => {
-                  if (event.target.files) void addFiles(event.target.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-            <label className="file-button">
-              Choose Folder
-              <input
-                type="file"
-                multiple
-                {...{ webkitdirectory: "true", directory: "true" }}
-                onChange={(event) => {
-                  if (event.target.files) void addFiles(event.target.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-            <span className="drop-hint">or drag and drop the whole folder here</span>
-          </div>
-          <div className="upload-grid">
-            <UploadTile
-              title="Attendance Report"
-              description="Required: Attendance Report.xls or .xlsx"
-              file={inputs.attendance}
-              onFiles={(files) => void addFiles(files)}
-            />
-            <UploadTile
-              title="Absence Report"
-              description="Required: Absence Report.xls or .xlsx"
-              file={inputs.absences}
-              onFiles={(files) => void addFiles(files)}
-            />
-            <UploadTile
-              title="Employee Transactions_vacations"
-              description="Required: Employee Transactions_vacations.xls or .xlsx"
-              file={inputs.vacations}
-              onFiles={(files) => void addFiles(files)}
-            />
-            <UploadTile
-              title="Permissions (alternate)"
-              description="Optional: permissions.xls (alternate permissions file)"
-              file={inputs.alternatePermissions}
-              optional
-              onFiles={(files) => void addFiles(files)}
-            />
-            <UploadTile
-              title="Resignations"
-              description="Optional: Resignations.xls or .xlsx"
-              file={inputs.resignations}
-              optional
-              onFiles={(files) => void addFiles(files)}
-            />
-            <UploadTile
-              title="Public Holiday"
-              description="Optional: Public Holiday.xls or .xlsx"
-              file={inputs.publicHoliday}
-              optional
-              onFiles={(files) => void addFiles(files)}
-            />
+      <nav className="tabs" aria-label="Payroll dashboard sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={activeTab === tab.id ? "active" : ""}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "inputs" && (
+        <section className="grid two tab-panel">
+          <div className="card">
+            <h2>Input Files</h2>
+            <p>Choose or drag each report into its own cell. The cell decides the file role, so the filename does not need to match exactly.</p>
+            <div className="upload-grid">
+              <UploadTile title="Attendance Report" description="Required attendance export" file={inputs.attendance} onFile={(file) => void assignInputFile("attendance", file)} />
+              <UploadTile title="Absence Report" description="Required absence export" file={inputs.absences} onFile={(file) => void assignInputFile("absences", file)} />
+              <UploadTile title="Employee Transactions_vacations" description="Required vacation/transaction export" file={inputs.vacations} onFile={(file) => void assignInputFile("vacations", file)} />
+              <UploadTile title="Public Holiday" description="Required public holiday workbook" file={inputs.publicHoliday} onFile={(file) => void assignInputFile("publicHoliday", file)} />
+              <UploadTile title="Resignations" description="Optional resignation workbook" file={inputs.resignations} optional onFile={(file) => void assignInputFile("resignations", file)} />
+            </div>
+
+            <div className="permission-input">
+              <h3>Permission Request</h3>
+              <p className="helper-text">
+                Use either the raw request report or a prepared details report. If both are uploaded, the raw report is preferred and prepared again.
+              </p>
+              <div className="upload-grid two-tiles">
+                <UploadTile title="Raw Permission Request Report" description="Nagwa_Permission_Request_Report export" file={inputs.rawPermissions} onFile={(file) => void assignInputFile("rawPermissions", file)} />
+                <UploadTile title="Prepared Permission Details" description="Nagwa_Permission_Request_permission_details export" file={inputs.preparedPermissions} onFile={(file) => void assignInputFile("preparedPermissions", file)} />
+                <UploadTile title="Permissions alternate" description="Optional permissions.xls fallback" file={inputs.alternatePermissions} optional onFile={(file) => void assignInputFile("alternatePermissions", file)} />
+              </div>
+              {permissionMode(inputs) === "raw" && (
+                <div className="permission-options">
+                  <p className="helper-text">
+                    A raw permission report was uploaded, so the pipeline will prepare it first. These options control that preparation step.
+                  </p>
+                  <div className="controls">
+                    <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
+                    <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
+                    <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={permissionOptions.noRequestCutoff}
+                        onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
+                      />
+                      No request cutoff
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="permission-input">
-            <h3>Permission Request</h3>
-            <p className="helper-text">
-              Upload the prepared details file, or the raw request report — the pipeline prepares the raw report automatically before running.
-            </p>
-            <UploadTile
-              title="Permission details or raw report"
-              description="Required: Nagwa_Permission_Request_permission_details.xls (prepared) or Nagwa_Permission_Request_Report.xls (raw)"
-              file={inputs.preparedPermissions ?? inputs.rawPermissions}
-              onFiles={(files) => void addFiles(files)}
-            />
-            {permissionMode(inputs) === "raw" && (
-              <div className="permission-options">
-                <p className="helper-text">
-                  A raw `Nagwa_Permission_Request_Report` was uploaded, so the pipeline will prepare it first. These options control that preparation step.
-                </p>
-                <div className="controls">
-                  <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
-                  <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
-                  <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
-                  <label className="toggle">
-                    <input
-                      type="checkbox"
-                      checked={permissionOptions.noRequestCutoff}
-                      onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
-                    />
-                    No request cutoff
-                  </label>
-                </div>
+          <div className="card">
+            <h2>Private Templates</h2>
+            <p>Required for real runs. Drop each styled template into its own cell; templates stay in the browser.</p>
+            <div className="upload-grid two-tiles">
+              <UploadTile title="Nagwa Technologies template" description="Detailed workbook template" file={inputs.nagwaTemplate} accept=".xlsx" onFile={(file) => void assignInputFile("nagwaTemplate", file)} />
+              <UploadTile title="Final Nagwa Technologies template" description="Final report template" file={inputs.finalTemplate} accept=".xlsx" onFile={(file) => void assignInputFile("finalTemplate", file)} />
+            </div>
+            {missing.length > 0 && (
+              <div className="missing-list">
+                <strong>Still needed:</strong>
+                <ul>
+                  {missing.map((item) => <li key={item}>{item}</li>)}
+                </ul>
               </div>
             )}
           </div>
+        </section>
+      )}
 
-          <div className="meta-row">
-            <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
-            <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
-          </div>
-        </div>
-
-        <div
-          className="card"
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            addStandalonePermissionFiles(event.dataTransfer.files);
-          }}
-        >
-          <h2>Prepare Permissions Only</h2>
-          <p>Use this when HR only needs to convert `Nagwa_Permission_Request_Report` into the prepared permission-details report.</p>
-          <UploadTile
-            title="Raw Permission Request Report"
-            description="Required: Nagwa_Permission_Request_Report.xls or .xlsx"
-            file={standalonePermissionFile ?? undefined}
-            onFiles={addStandalonePermissionFiles}
-          />
-          <div className="controls">
-            <TextInput label="Payroll month" type="number" value={permissionOptions.month} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, month: Number(value) }))} />
-            <TextInput label="Year" type="number" value={permissionOptions.year} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, year: Number(value) }))} />
-            <TextInput label="Cutoff days" type="number" value={permissionOptions.requestCutoffDays} onChange={(value) => setPermissionOptions((prev) => ({ ...prev, requestCutoffDays: Number(value) }))} />
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={permissionOptions.noRequestCutoff}
-                onChange={(event) => setPermissionOptions((prev) => ({ ...prev, noRequestCutoff: event.target.checked }))}
-              />
-              No request cutoff
-            </label>
-          </div>
-          <button type="button" onClick={preparePermissionsOnly} disabled={running || preparingPermissions}>
-            {preparingPermissions ? "Preparing..." : "Prepare Permissions Only"}
-          </button>
-          {standaloneSummary && <p className="summary-line">{standaloneSummary}</p>}
-        </div>
-      </section>
-
-      <section
-        className="card"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          void addTemplateFiles(event.dataTransfer.files);
-        }}
-      >
-        <h2>Private Templates</h2>
-        <p>Required for real runs: upload the two current styled templates here. They stay in the browser and are not bundled in the public repo.</p>
-        <div className="bulk-upload">
-          <label className="file-button">
-            Choose Files
-            <input
-              type="file"
-              multiple
-              accept=".xlsx"
-              onChange={(event) => {
-                if (event.target.files) void addTemplateFiles(event.target.files);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <span className="drop-hint">or drag and drop the two template files here</span>
-        </div>
-        <div className="upload-grid two-tiles">
-          <UploadTile
-            title="Nagwa Technologies template"
-            description="Required: Nagwa Technologies.xlsx"
-            file={inputs.nagwaTemplate}
-            accept=".xlsx"
-            onFiles={(files) => void addTemplateFiles(files)}
-          />
-          <UploadTile
-            title="Final Nagwa Technologies template"
-            description="Required: Final Nagwa Technologies.xlsx"
-            file={inputs.finalTemplate}
-            accept=".xlsx"
-            onFiles={(files) => void addTemplateFiles(files)}
-          />
-        </div>
-      </section>
-
-      <section className="card">
-        <details>
-          <summary>Settings / Rules Panel</summary>
+      {activeTab === "settings" && (
+        <section className="card tab-panel">
+          <h2>Settings / Rules Panel</h2>
           <div className="settings-grid">
             <TextInput label="Ramadan start" type="date" value={settings.ramadanStart} onChange={(value) => updateSettings({ ...settings, ramadanStart: value as PayrollSettings["ramadanStart"] })} />
             <TextInput label="Ramadan end" type="date" value={settings.ramadanEnd} onChange={(value) => updateSettings({ ...settings, ramadanEnd: value as PayrollSettings["ramadanEnd"] })} />
@@ -583,25 +375,9 @@ function App() {
             <TextInput label="Lunch before end" value={settings.lunchWindowBefore.end} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, end: value } })} />
             <TextInput label="Lunch from start" value={settings.lunchWindowFrom.start} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, start: value } })} />
             <TextInput label="Lunch from end" value={settings.lunchWindowFrom.end} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, end: value } })} />
-            <label className="toggle field">
-              <input type="checkbox" checked={settings.debugMode} onChange={(event) => updateSettings({ ...settings, debugMode: event.target.checked })} />
-              Debug mode
-            </label>
           </div>
 
           <div className="rule-columns">
-            <section>
-              <h3>Schedule Types</h3>
-              <p className="helper-text">These names come from the Schedule column in the employee template. The time is the latest time that counts toward attendance.</p>
-              {Object.entries(settings.scheduleWindowEnd).map(([name, value]) => (
-                <div className="inline-row" key={name}>
-                  <input value={name} readOnly />
-                  <input value={value} onChange={(event) => updateSettings({ ...settings, scheduleWindowEnd: { ...settings.scheduleWindowEnd, [name]: event.target.value } })} />
-                </div>
-              ))}
-              <button type="button" onClick={() => updateSettings({ ...settings, scheduleWindowEnd: { ...settings.scheduleWindowEnd, newSchedule: "16:00" } })}>Add schedule</button>
-            </section>
-
             <section>
               <h3>Special-Rule Pairs</h3>
               <p className="helper-text">
@@ -629,7 +405,7 @@ function App() {
                     next[index] = { ...pair, employeeA: pair.employeeB, employeeB: pair.employeeA };
                     updateSettings({ ...settings, specialRulePairs: next });
                   }}>
-                    ↔ Swap A/B
+                    Swap A/B
                   </button>
                 </div>
               ))}
@@ -659,26 +435,6 @@ function App() {
               </div>
               <button type="button" onClick={addHourReduction}>Add employee</button>
             </section>
-
-            <section>
-              <h3>Final Report Abbreviations</h3>
-              <p className="helper-text">When the final report sees a long leave label, it writes the short code here. Matching ignores uppercase/lowercase and extra spaces.</p>
-              <div className="editable-table">
-                <div className="table-head three-cols">
-                  <span>Leave Label</span>
-                  <span>Short Code</span>
-                  <span>Action</span>
-                </div>
-                {abbreviationRows.map((row) => (
-                  <div className="table-row three-cols" key={row.id}>
-                    <input value={row.label} onChange={(event) => updateAbbreviation(row.id, "label", event.target.value)} />
-                    <input value={row.code} onChange={(event) => updateAbbreviation(row.id, "code", event.target.value)} />
-                    <button type="button" className="secondary-action" onClick={() => removeAbbreviation(row.id)}>Remove</button>
-                  </div>
-                ))}
-              </div>
-              <button type="button" onClick={addAbbreviation}>Add abbreviation</button>
-            </section>
           </div>
           <div className="settings-reset-actions">
             <div className="reset-action-card">
@@ -691,15 +447,12 @@ function App() {
               {validationErrors.map((item) => <li key={item}>{item}</li>)}
             </ul>
           )}
-        </details>
-      </section>
+        </section>
+      )}
 
-      <section className="grid two">
-        <div className="card">
+      {activeTab === "log" && (
+        <section className="card tab-panel">
           <h2>Run Log</h2>
-          <p className="helper-text">
-            If a public-holiday date says it was not found, that date is outside the detected 21-to-20 payroll period or falls on a Friday/Saturday, so there is no workday column to mark.
-          </p>
           <ol className="steps">
             {["extend_nagwa_technologies", "fill_attendance", "extend_final_nagwa_technologies", "complete_final"].map((step, index) => (
               <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/4 {stepLabel(step)}</li>
@@ -708,9 +461,11 @@ function App() {
           <div className="log-panel">
             {logs.length === 0 ? <p>No run yet.</p> : logs.map((entry, index) => <pre key={`${entry.at}-${index}`} className={entry.level}>{formatLog(entry)}</pre>)}
           </div>
-        </div>
+        </section>
+      )}
 
-        <div className="card">
+      {activeTab === "outputs" && (
+        <section className="card tab-panel">
           <h2>Output</h2>
           {result ? (
             <div className="downloads">
@@ -725,15 +480,8 @@ function App() {
           <div className="metrics">
             {metrics.map((metric) => <p key={metric.step}><strong>{stepLabel(metric.step)}</strong>: {formatMetric(metric)}</p>)}
           </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <h2>Gotchas surfaced before every run</h2>
-        <div className="gotchas">
-          {GOTCHA_MESSAGES.map((message) => <span key={message}>{message}</span>)}
-        </div>
-      </section>
+        </section>
+      )}
     </main>
   );
 }

@@ -81,7 +81,7 @@ function postStatus(message: string) {
 
 function levelFromLine(line: string): RunLogEntry["level"] {
   if (/error|traceback|failed/i.test(line)) return "error";
-  if (/warning|skipped|not found/i.test(line)) return "warn";
+  if (/warning/i.test(line)) return "warn";
   if (/saved|done|completed successfully/i.test(line)) return "success";
   return "info";
 }
@@ -89,6 +89,10 @@ function levelFromLine(line: string): RunLogEntry["level"] {
 function postLog(step: string, message: string, level = levelFromLine(message)) {
   const trimmed = message.trim();
   if (!trimmed) return;
+  if (/holiday date .* not found in Nagwa workday columns/i.test(trimmed)) return;
+  if (/holiday date\(s\) not found in Nagwa sheet/i.test(trimmed)) return;
+  if (/\b(rows?|day-slots?|dates?) skipped\b/i.test(trimmed)) return;
+  if (/No data warnings\./i.test(trimmed)) return;
   const entry = nowLog(step, trimmed, level);
   logs.push(entry);
   post({ type: "log", entry });
@@ -183,20 +187,19 @@ async function writePipelineInputs(pyodide: Pyodide, inputs: PayrollInputFiles) 
   const attendance = requireFile(inputs.attendance, "Attendance Report");
   const absences = requireFile(inputs.absences, "Absence Report");
   const vacations = requireFile(inputs.vacations, "Employee Transactions_vacations");
+  const publicHoliday = requireFile(inputs.publicHoliday, "Public Holiday");
   const nagwaTemplate = requireFile(inputs.nagwaTemplate, "Nagwa Technologies template");
   const finalTemplate = requireFile(inputs.finalTemplate, "Final Nagwa Technologies template");
 
   await writeUploadedFile(pyodide, attendance, `${RAW_DATA_DIR}/Attendance Report.${extensionOf(attendance)}`);
   await writeUploadedFile(pyodide, absences, `${RAW_DATA_DIR}/Absence Report.${extensionOf(absences)}`);
   await writeUploadedFile(pyodide, vacations, `${RAW_DATA_DIR}/Employee Transactions_vacations.${extensionOf(vacations)}`);
+  await writeUploadedFile(pyodide, publicHoliday, `${RAW_DATA_DIR}/Public Holiday.${extensionOf(publicHoliday)}`);
   await writeUploadedFile(pyodide, nagwaTemplate, `${TEMPLATES_DIR}/Nagwa Technologies.xlsx`);
   await writeUploadedFile(pyodide, finalTemplate, `${TEMPLATES_DIR}/Final Nagwa Technologies.xlsx`);
 
   if (inputs.resignations) {
     await writeUploadedFile(pyodide, inputs.resignations, `${RAW_DATA_DIR}/Resignations.${extensionOf(inputs.resignations)}`);
-  }
-  if (inputs.publicHoliday) {
-    await writeUploadedFile(pyodide, inputs.publicHoliday, `${RAW_DATA_DIR}/Public Holiday.${extensionOf(inputs.publicHoliday)}`);
   }
 }
 

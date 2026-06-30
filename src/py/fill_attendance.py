@@ -658,8 +658,10 @@ def fill_resignations(sheet, date_col_map, code_row_map):
             if d >= res_date:
                 in_col = date_col_map[d]
                 out_col = in_col + 1
+                shortage_col = in_col + 3
                 sheet.cell(nagwa_row, in_col).value = "Resigned"
                 sheet.cell(nagwa_row, out_col).value = "Resigned"
+                sheet.cell(nagwa_row, shortage_col).value = "Resigned"
                 filled += 1
 
     print(f"\nResignations done! {filled} day-cells filled.")
@@ -718,6 +720,22 @@ def read_permissions():
     """Read the Permission Request report and return a cleaned DataFrame."""
     df = pd.read_excel(resolve_report_path(PERMISSIONS_BASENAME), engine="calamine")
     df.columns = df.columns.str.strip()
+    if "Transaction Type" in df.columns:
+        before_cancel = len(df)
+        df = df[
+            ~df["Transaction Type"].astype(str).str.contains(
+                "cancel", case=False, na=False
+            )
+        ]
+        excluded = before_cancel - len(df)
+        if excluded:
+            print(f"  {excluded} cancelled permission row(s) ignored.")
+    if "Status" in df.columns:
+        before_status = len(df)
+        df = df[df["Status"].astype(str).str.strip() == "Approved"]
+        excluded = before_status - len(df)
+        if excluded:
+            print(f"  {excluded} non-approved permission row(s) ignored.")
     df = df.dropna(subset=["Employee Code"])
     df["Employee Code"] = df["Employee Code"].astype(int)
     return df
@@ -869,7 +887,7 @@ def classify_leave_type(leave_type, leave_start=None, leave_end=None):
     """Map a leave-type string to a rule category.
 
     Returns one of '1st_half_annual', '2nd_half_annual',
-    '1st_half_ramadan', '2nd_half_ramadan', 'permission',
+    '1st_half_ramadan', '2nd_half_ramadan', 'permission', 'work_mission',
     or None if the type does not trigger a shortage override.
 
     Generic "Half Day Annual"/"Half Day Ramadan" entries (e.g. the
@@ -899,11 +917,17 @@ def classify_leave_type(leave_type, leave_start=None, leave_end=None):
         if position == "second":
             return "2nd_half_ramadan"
         return None
-    if normalized in ("permission", "work mission"):
+    if normalized == "work mission":
+        return "work_mission"
+    if normalized == "permission":
         return "permission"
     if "educational leave" in normalized and "core of business" in normalized:
         return "permission"
     return None
+
+
+def is_permitted_delay_type(leave_type):
+    return "permitted delays" in str(leave_type or "").strip().lower()
 
 
 def _time_to_min(t):
@@ -916,6 +940,34 @@ def _overlap_minutes(pres_start, pres_end, win_start, win_end):
     lo = max(_time_to_min(pres_start), _time_to_min(win_start))
     hi = min(_time_to_min(pres_end), _time_to_min(win_end))
     return max(0, hi - lo)
+
+
+def _merged_covered_minutes(intervals, win_start, win_end):
+    """Return unique covered minutes inside [win_start, win_end]."""
+    win_lo = _time_to_min(win_start)
+    win_hi = _time_to_min(win_end)
+    clipped = []
+    for start, end in intervals:
+        if start is None or end is None:
+            continue
+        lo = max(_time_to_min(start), win_lo)
+        hi = min(_time_to_min(end), win_hi)
+        if hi > lo:
+            clipped.append((lo, hi))
+    clipped.sort()
+
+    covered = 0
+    cur_lo = cur_hi = None
+    for lo, hi in clipped:
+        if cur_hi is None or lo > cur_hi:
+            if cur_hi is not None:
+                covered += cur_hi - cur_lo
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    if cur_hi is not None:
+        covered += cur_hi - cur_lo
+    return covered
 
 
 def _apply_halfday_rule(
@@ -1069,6 +1121,25 @@ def _apply_permission_rule(
     return True
 
 
+def _apply_work_mission_rule(
+    sheet, nagwa_row, shortage_col, mission_intervals, in_time, out_time, d, window_end,
+):
+    """Treat Work Mission intervals as worked/covered time on their effective day."""
+    if d and RAMADAN_START <= d <= RAMADAN_END:
+        full_day = FULL_DAY_RAMADAN
+    else:
+        full_day = FULL_DAY_NORMAL
+
+    intervals = list(mission_intervals)
+    if in_time is not None and out_time is not None:
+        intervals.append((in_time, out_time))
+
+    covered = _merged_covered_minutes(intervals, WORKDAY_START, window_end)
+    shortage = max(0, full_day - covered)
+    sheet.cell(nagwa_row, shortage_col).value = minutes_to_hhmm(shortage)
+    return True
+
+
 def _subtract_leave_from_shortage(sheet, nagwa_row, shortage_col, leave_start, leave_end):
     """Subtract a leave entry's duration from the current shortage value.
 
@@ -1149,8 +1220,25 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                 category = classify_leave_type(leave_type, leave_start, leave_end)
                 parsed_entries.append((leave_type, leave_start, leave_end, category))
 
+            mission_intervals = [
+                (p[1], p[2])
+                for p in parsed_entries
+                if p is not None and p[3] == "work_mission"
+            ]
+
             rule_applied = False
             any_change = False
+            if mission_intervals and not any(
+                p is not None and p[3] in _HALFDAY_CATEGORIES
+                for p in parsed_entries
+            ):
+                if _apply_work_mission_rule(
+                    sheet, nagwa_row, shortage_col, mission_intervals,
+                    in_time, out_time, d, window_end,
+                ):
+                    rule_applied = True
+                    any_change = True
+
             for idx, parsed in enumerate(parsed_entries):
                 if parsed is None:
                     continue
@@ -1162,7 +1250,12 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                     other_leaves = [
                         (p[1], p[2])
                         for j, p in enumerate(parsed_entries)
-                        if j != idx and p is not None and p[3] not in _HALFDAY_CATEGORIES
+                        if (
+                            j != idx
+                            and p is not None
+                            and p[3] not in _HALFDAY_CATEGORIES
+                            and not is_permitted_delay_type(p[0])
+                        )
                     ]
                     changed = _apply_halfday_rule(
                         sheet, nagwa_row, in_col, shortage_col, category,
@@ -1191,6 +1284,8 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                             sheet, nagwa_row, shortage_col, leave_start, leave_end,
                         ):
                             any_change = True
+                elif category == "work_mission":
+                    continue
 
             if any_change:
                 overridden += 1
@@ -1226,23 +1321,6 @@ def apply_permitted_delays(sheet, date_col_map, code_row_map):
             if not raw_entries:
                 continue
 
-            # If a half-day-style leave is present on this day, the half-day
-            # rule has already credited any permitted-delay interval as
-            # coverage inside its required-presence window. Subtracting the
-            # delay again here would double-count and erase legitimate
-            # uncovered shortage (e.g. signing in after the permission ends).
-            has_halfday = False
-            for raw_entry in raw_entries:
-                try:
-                    lt, lt_start, lt_end = parse_leave_cell(raw_entry)
-                except ValueError:
-                    continue
-                if lt and classify_leave_type(lt, lt_start, lt_end) in _HALFDAY_CATEGORIES:
-                    has_halfday = True
-                    break
-            if has_halfday:
-                continue
-
             for raw_entry in raw_entries:
                 try:
                     leave_type, leave_start, leave_end = parse_leave_cell(raw_entry)
@@ -1265,9 +1343,10 @@ def apply_permitted_delays(sheet, date_col_map, code_row_map):
                     continue
 
                 current_shortage = sheet.cell(nagwa_row, shortage_col).value
-                if isinstance(current_shortage, str) and current_shortage.strip() == "Missing Punch":
+                current_str = "" if current_shortage is None else str(current_shortage).strip()
+                if not re.match(r"^\d+:\d{2}$", current_str):
                     continue
-                current_minutes = parse_duration(current_shortage)
+                current_minutes = parse_duration(current_str)
 
                 new_shortage = max(0, current_minutes - delay_minutes)
                 sheet.cell(nagwa_row, shortage_col).value = minutes_to_hhmm(new_shortage)
@@ -1430,14 +1509,20 @@ def fill_missing_punches(sheet, date_col_map, code_row_map):
     for emp_code, nagwa_row in code_row_map.items():
         for d, in_col in date_col_map.items():
             out_col = in_col + 1
+            leave_col = in_col + 2
             shortage_col = in_col + 3
 
             in_val = sheet.cell(nagwa_row, in_col).value
             out_val = sheet.cell(nagwa_row, out_col).value
+            leave_val = sheet.cell(nagwa_row, leave_col).value
 
             in_str = "" if in_val is None else str(in_val).strip()
             out_str = "" if out_val is None else str(out_val).strip()
             shortage_str = "" if sheet.cell(nagwa_row, shortage_col).value is None else str(sheet.cell(nagwa_row, shortage_col).value).strip()
+            leave_str = "" if leave_val is None else str(leave_val).strip()
+
+            if "work mission" in leave_str.lower() and re.match(r"^\d+:\d{2}$", shortage_str):
+                continue
 
             if "Missing Punch" in (in_str, out_str, shortage_str):
                 sheet.cell(nagwa_row, in_col).value = "absent"
