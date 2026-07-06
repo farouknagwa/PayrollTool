@@ -1225,13 +1225,14 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                 for p in parsed_entries
                 if p is not None and p[3] == "work_mission"
             ]
+            has_halfday = any(
+                p is not None and p[3] in _HALFDAY_CATEGORIES
+                for p in parsed_entries
+            )
 
             rule_applied = False
             any_change = False
-            if mission_intervals and not any(
-                p is not None and p[3] in _HALFDAY_CATEGORIES
-                for p in parsed_entries
-            ):
+            if mission_intervals and not has_halfday:
                 if _apply_work_mission_rule(
                     sheet, nagwa_row, shortage_col, mission_intervals,
                     in_time, out_time, d, window_end,
@@ -1280,6 +1281,12 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                             in_time = parse_time_value(sheet.cell(nagwa_row, in_col).value)
                             out_time = parse_time_value(sheet.cell(nagwa_row, in_col + 1).value)
                     else:
+                        if has_halfday:
+                            # The half-day rule already counted normal
+                            # permissions as covered time inside its required
+                            # work window. Do not subtract the same interval a
+                            # second time; permitted delays are handled later.
+                            continue
                         if _subtract_leave_from_shortage(
                             sheet, nagwa_row, shortage_col, leave_start, leave_end,
                         ):
