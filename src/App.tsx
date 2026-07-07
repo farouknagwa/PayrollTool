@@ -259,28 +259,35 @@ function App() {
   ];
 
   return (
-    <main className="app-shell">
-      <header className="hero-panel">
-        <div>
-          <p className="eyebrow">100% browser-side payroll processing</p>
-          <h1>PayrollTool Web</h1>
-          <p className="lead">
-            Run the Nagwa payroll pipeline in the browser. Files stay on this device; no backend, API key, or upload server is used.
-          </p>
-          <div className="meta-row hero-meta">
-            <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
-            <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
-          </div>
-        </div>
-        <div className="hero-actions">
-          <button className="primary" type="button" onClick={runPayroll} disabled={running || missing.length > 0 || validationErrors.length > 0}>
-            {running ? "Running..." : "Run Payroll"}
-          </button>
-          <button type="button" onClick={stopWorker} disabled={!running}>
-            Stop
-          </button>
+    <div className="app-layout">
+      <header className="site-header">
+        <div className="site-header-inner">
+          <img className="site-logo" src={`${import.meta.env.BASE_URL}logo.svg`} alt="Nagwa" />
         </div>
       </header>
+
+      <main className="app-shell">
+        <header className="hero-panel">
+          <div>
+            <p className="eyebrow">100% browser-side payroll processing</p>
+            <h1>PayrollTool</h1>
+            <p className="lead">
+              Run the Nagwa payroll pipeline in the browser. Files stay on this device; no backend, API key, or upload server is used.
+            </p>
+            <div className="meta-row hero-meta">
+              <span>Permission mode: <strong>{permissionMode(inputs)}</strong></span>
+              <span>Detected period: <strong>{detectedPeriod || "Upload Attendance Report"}</strong></span>
+            </div>
+          </div>
+          <div className="hero-actions">
+            <button className="primary" type="button" onClick={runPayroll} disabled={running || missing.length > 0 || validationErrors.length > 0}>
+              {running ? "Running..." : "Run Payroll"}
+            </button>
+            <button type="button" onClick={stopWorker} disabled={!running}>
+              Stop
+            </button>
+          </div>
+        </header>
 
       {error && <div className="toast error">{error}</div>}
       {engineStatus && <div className="toast info">{engineStatus}</div>}
@@ -482,7 +489,13 @@ function App() {
           </div>
         </section>
       )}
-    </main>
+      </main>
+
+      <footer className="site-footer">
+        <p>Copyright © 2026 Nagwa</p>
+        <p>All Rights Reserved</p>
+      </footer>
+    </div>
   );
 }
 

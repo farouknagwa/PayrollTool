@@ -1,18 +1,26 @@
 :root {
-  --bg: #f5f7fb;
+  --nagwa-blue: #026bb0;
+  --nagwa-blue-hover: #0380c9;
+  --nagwa-blue-soft: rgba(2, 107, 176, 0.08);
+  --nagwa-pink: #e51d74;
+  --nagwa-gold: #f5aa00;
+  --nagwa-green: #78b517;
+  --nagwa-gray: #575756;
+  --nagwa-muted: #6d6e71;
+  --bg: #f7f7f7;
   --panel: #ffffff;
-  --text: #111827;
-  --muted: #6b7280;
-  --border: #d9e0ea;
-  --accent: #1d4ed8;
-  --accent-strong: #1e40af;
-  --accent-soft: #dbeafe;
+  --text: #333333;
+  --muted: #6d6e71;
+  --border: #dddddd;
+  --accent: var(--nagwa-blue);
+  --accent-strong: var(--nagwa-blue-hover);
+  --accent-soft: var(--nagwa-blue-soft);
   --success: #047857;
   --warning: #b45309;
   --danger: #b91c1c;
-  --shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+  --shadow: 0 2px 14px rgba(51, 51, 51, 0.12);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -44,9 +52,9 @@ button {
   cursor: pointer;
 }
 
-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+button:hover:not(:disabled):not(.primary) {
+  border-color: var(--nagwa-blue);
+  color: var(--nagwa-blue);
 }
 
 button:disabled {
@@ -90,4 +98,6 @@ p {
 
 #root {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
