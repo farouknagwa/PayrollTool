@@ -38,6 +38,44 @@ def resolve_report_path(base_name, folder=RAW_DATA_DIR):
         f"(tried .xlsx and .xls)."
     )
 
+
+def _looks_like_employee_code(value):
+    """True if a cell value looks like a numeric employee code (a data row)."""
+    if value is None:
+        return False
+    s = str(value).strip()
+    if s in ("", "nan", "None"):
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _read_positional_report(base_name, folder=RAW_DATA_DIR, code_col=0):
+    """Read a report whose columns are addressed positionally.
+
+    These raw exports carry a single header row, but the reader historically
+    assumed two and used ``skiprows=2``, which silently discarded the first
+    data record (e.g. the first employee's absence). Instead of hard-coding a
+    skip count, detect the first data row as the first row whose ``code_col``
+    cell holds a numeric employee code and drop everything above it. This
+    tolerates reports with one or two header/pre-amble rows without losing the
+    first record.
+    """
+    raw = pd.read_excel(
+        resolve_report_path(base_name, folder),
+        engine="calamine",
+        header=None,
+    )
+    start = 0
+    for i in range(len(raw)):
+        if _looks_like_employee_code(raw.iat[i, code_col]):
+            start = i
+            break
+    return raw.iloc[start:].reset_index(drop=True)
+
 WORKDAY_START = time(8, 0)
 WORKDAY_END_NORMAL = time(16, 0)
 WORKDAY_END_RAMADAN = time(14, 30)
@@ -345,14 +383,72 @@ def build_code_schedule_map(sheet, code_row_map):
     return schedule_map
 
 
+def _coerce_date(value):
+    """Best-effort conversion of a cell value into a ``date`` (or None)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    # pandas Timestamp is a datetime subclass, so the check above covers it.
+    s = str(value).strip()
+    if s in ("", "nan", "None"):
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%b-%y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _dates_from_ddmmyyyy(series):
+    """Return the list of ``date`` values parsed from a DD/MM/YYYY series."""
+    parsed = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce").dropna()
+    return [ts.date() for ts in parsed]
+
+
+def compute_coverage_window():
+    """Return (min_date, max_date) actually covered by the source reports.
+
+    The HR period built into the sheet can extend past the data that has been
+    reported so far (e.g. a 21st->20th period while the reports only cover up
+    to the run date). The closed-world absence sweep must never infer an
+    absence for a day outside this window, since no data exists for it yet.
+    Dates are drawn from the Attendance and Absence reports; either may be
+    missing. Returns ``(None, None)`` when no dated rows are available.
+    """
+    dates = []
+    try:
+        dates += _dates_from_ddmmyyyy(read_attendance()["Attendance Day"])
+    except (FileNotFoundError, KeyError):
+        pass
+    try:
+        dates += _dates_from_ddmmyyyy(read_absences()["Absence Date"])
+    except (FileNotFoundError, KeyError):
+        pass
+    if not dates:
+        return None, None
+    return min(dates), max(dates)
+
+
+def build_code_employment_map(sheet, code_row_map):
+    """Build a dict: employee_code -> (hire_date, termination_date).
+
+    Hire Date lives in column G (7) and Termination Date in column H (8) of the
+    Nagwa sheet. Either bound is ``None`` when the cell is empty/unparseable,
+    meaning "open on that end" for employment-window checks.
+    """
+    employment_map = {}
+    for emp_code, row in code_row_map.items():
+        hire = _coerce_date(sheet.cell(row, 7).value)
+        term = _coerce_date(sheet.cell(row, 8).value)
+        employment_map[emp_code] = (hire, term)
+    return employment_map
+
+
 def read_attendance():
     """Read the Attendance Report and return a cleaned DataFrame."""
-    df = pd.read_excel(
-        resolve_report_path(ATTENDANCE_BASENAME),
-        engine="calamine",
-        header=None,
-        skiprows=2,
-    )
+    df = _read_positional_report(ATTENDANCE_BASENAME)
     df.columns = [
         "Code", "Employee Name", "Card Id", "Weekday", "Attendance Day",
         "Work Time", "Entry Time", "Late", "TA Permissions", "Early Overtime",
@@ -366,12 +462,7 @@ def read_attendance():
 
 def read_absences():
     """Read the Absence Report and return a cleaned DataFrame."""
-    df = pd.read_excel(
-        resolve_report_path(ABSENCES_BASENAME),
-        engine="calamine",
-        header=None,
-        skiprows=2,
-    )
+    df = _read_positional_report(ABSENCES_BASENAME)
     df = df.dropna(subset=[df.columns[0]])
     df.rename(columns={df.columns[0]: "Employee Code", df.columns[4]: "Absence Date"}, inplace=True)
     df["Employee Code"] = df["Employee Code"].astype(str).str.strip()
@@ -440,6 +531,7 @@ def main():
     single_date_col_map = build_single_date_column_map(sheet, date_col_map)
     code_row_map = build_code_row_map(sheet)
     code_schedule_map = build_code_schedule_map(sheet, code_row_map)
+    code_employment_map = build_code_employment_map(sheet, code_row_map)
 
     print(f"  {len(date_col_map)} workday date columns found.")
     print(f"  {len(single_date_col_map)} single-cell date columns found.")
@@ -529,8 +621,15 @@ def main():
     # --- Missing Punch sweep (final step) ---
     fill_missing_punches(sheet, date_col_map, code_row_map)
 
-    # --- WFH / Workday leave overrides (must run last) ---
+    # --- WFH / Workday leave overrides ---
     apply_wfh_and_workday_overrides(sheet, date_col_map, code_row_map)
+
+    # --- Full-day absence safety net (closed-world; must run last) ---
+    coverage_start, coverage_end = compute_coverage_window()
+    fill_full_day_absences(
+        sheet, date_col_map, code_row_map, code_employment_map,
+        coverage_start, coverage_end,
+    )
 
     wb.save(NAGWA_PATH)
     print(f"\nSaved to {NAGWA_PATH}")
@@ -538,12 +637,7 @@ def main():
 
 def read_vacations():
     """Read the Employee Transactions (vacations) report and return a cleaned DataFrame."""
-    df = pd.read_excel(
-        resolve_report_path(VACATIONS_BASENAME),
-        engine="calamine",
-        header=None,
-        skiprows=2,
-    )
+    df = _read_positional_report(VACATIONS_BASENAME)
     df.columns = [
         "Employee Code", "Employee Name", "Date", "Vacation End Date",
         "Vacation Type", "Vacation Days", "Deduction Amount", "Delegate Code",
@@ -1557,6 +1651,91 @@ def fill_missing_punches(sheet, date_col_map, code_row_map):
             filled += 1
 
     print(f"Missing punch absence sweep done! {filled} day-cell(s) marked absent.")
+
+
+def _cell_is_blank(value):
+    """True if a sheet cell is empty (None or a blank/placeholder string)."""
+    if value is None:
+        return True
+    return str(value).strip() in ("", "nan", "None")
+
+
+def _is_employed_on(employment_map, emp_code, att_date):
+    """True if ``emp_code`` is within its [hire, termination] window on a date.
+
+    A missing hire date is treated as "employed from the beginning" and a
+    missing termination date as "still employed", so only positively-known
+    pre-hire / post-termination days are excluded.
+    """
+    hire, term = employment_map.get(emp_code, (None, None))
+    if hire is not None and att_date < hire:
+        return False
+    if term is not None and att_date > term:
+        return False
+    return True
+
+
+def fill_full_day_absences(
+    sheet, date_col_map, code_row_map, employment_map,
+    coverage_start=None, coverage_end=None,
+):
+    """Closed-world safety net: mark scheduled working days that finished the
+    pipeline completely empty as 'absent'.
+
+    This backs up the Absence Report so a full no-show is still caught even if
+    the report omits it. A cell is only marked when ALL of these hold:
+
+      * the date is a scheduled working-day column (weekends are single-cell
+        columns and never appear in ``date_col_map``);
+      * the date is inside the reports' coverage window
+        ``[coverage_start, coverage_end]``, so days the period covers but the
+        source data does not report yet are never treated as absences;
+      * the in / out / Leave / Shortage cells are all blank, so anything
+        already resolved - punches, leave, holiday, vacation, resignation,
+        WFH/Workday, permission shortages - is left untouched;
+      * the employee was actively employed on that date (hire/termination
+        window from the Nagwa sheet), so a new hire's pre-hire days and a
+        leaver's post-termination days are not misreported as absences.
+
+    Every cell marked here is, by definition, a working-day absence that was
+    NOT captured by the Absence Report, so each one is logged for review.
+    """
+    print("\nScanning for uncaptured full-day absences...")
+    filled = 0
+    flagged = []
+
+    for emp_code, nagwa_row in code_row_map.items():
+        for att_date, in_col in date_col_map.items():
+            if coverage_start is not None and att_date < coverage_start:
+                continue
+            if coverage_end is not None and att_date > coverage_end:
+                continue
+            all_blank = all(
+                _cell_is_blank(sheet.cell(nagwa_row, in_col + k).value)
+                for k in range(4)
+            )
+            if not all_blank:
+                continue
+            if not _is_employed_on(employment_map, emp_code, att_date):
+                continue
+
+            sheet.cell(nagwa_row, in_col).value = "absent"
+            sheet.cell(nagwa_row, in_col + 1).value = "absent"
+            sheet.cell(nagwa_row, in_col + 3).value = "absent"
+            filled += 1
+            flagged.append((emp_code, att_date))
+
+    print(f"Full-day absence sweep done! {filled} day-cell(s) marked absent.")
+    if flagged:
+        print(
+            f"\n--- WARNING REPORT: {len(flagged)} full-day absence(s) not "
+            f"present in the Absence Report ---"
+        )
+        for emp_code, att_date in sorted(flagged, key=lambda pair: (pair[0], pair[1])):
+            print(
+                f"  * Employee {emp_code}, Date {att_date}: no attendance/leave "
+                f"recorded on a scheduled working day; marked absent."
+            )
 
 
 def apply_wfh_and_workday_overrides(sheet, date_col_map, code_row_map):
