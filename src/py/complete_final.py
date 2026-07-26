@@ -19,10 +19,11 @@ Target workbook: ``Final Nagwa Technologies.xlsx``
 
 For every (employee, date) pair that exists in both workbooks the script
 writes the chosen source value into the corresponding cell of the target
-workbook.  Column AN (``Total``) keeps the template's array formula; it is
-never overwritten with a static value. Column widths are auto-fitted to
-contents before save. All other cells, formulas and formatting are left
-untouched.
+workbook. Duration shortages are written as real Excel time serials (so the
+Total formula in column AN can ``SUM`` them); labels stay as text.
+Column AN (``Total``) keeps the template's array formula; it is never
+overwritten with a static value. Column widths are auto-fitted to contents
+before save. All other cells, formulas and formatting are left untouched.
 
 Usage:
     python complete_final.py [-s SOURCE.xlsx] [-t TARGET.xlsx]
@@ -94,22 +95,33 @@ ABBREVIATIONS: Dict[str, str] = {
 
 
 _DURATION_RE = re.compile(r"^\s*(\d{1,3}):([0-5]?\d)\s*$")
+_DURATION_HMS_RE = re.compile(r"^\s*(\d{1,3}):([0-5]?\d):([0-5]?\d)\s*$")
+_EXCEL_TIME_FORMAT = "h:mm:ss"
 
 
-def format_duration(value):
-    """Convert ``H:MM`` duration strings into ``H:MM:SS``.
+def duration_to_excel_time(value) -> Optional[float]:
+    """Convert an ``H:MM`` / ``H:MM:SS`` duration string to an Excel time serial.
 
-    Leaves anything else untouched (entry/exit times like ``"9:26 AM"`` are
-    not affected because of the trailing ``AM``/``PM``).
+    Excel stores times as a fraction of a day (e.g. 1 hour = ``1/24``). Writing
+    real serials (instead of text like ``"0:16:00"``) lets the Final sheet's
+    Total formula ``BYROW(..., SUM)`` add the day columns correctly.
+
+    Returns ``None`` when ``value`` is not a duration string (labels such as
+    ``"A"`` / ``"Public Holiday"`` pass through unchanged).
     """
     if not isinstance(value, str):
-        return value
-    m = _DURATION_RE.match(value)
-    if not m:
-        return value
-    hours = int(m.group(1))
-    minutes = int(m.group(2))
-    return f"{hours}:{minutes:02d}:00"
+        return None
+    m = _DURATION_HMS_RE.match(value.strip())
+    if m:
+        hours, minutes, seconds = (int(x) for x in m.groups())
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+    else:
+        m = _DURATION_RE.match(value.strip())
+        if not m:
+            return None
+        hours, minutes = (int(x) for x in m.groups())
+        total_seconds = hours * 3600 + minutes * 60
+    return total_seconds / 86400.0
 
 
 def _normalise_label(text: str) -> str:
@@ -275,6 +287,12 @@ def autofit_column_widths(sheet, min_width: float = 3.0, max_width: float = 40.0
                 text = value.strftime("%d-%b-%y")
             elif isinstance(value, date):
                 text = value.strftime("%d-%b-%y")
+            elif isinstance(value, float) and 0 <= value < 10:
+                # Excel time serials (fraction of a day) — show as h:mm:ss for width.
+                total_seconds = int(round(value * 86400))
+                hours, rem = divmod(total_seconds, 3600)
+                minutes, seconds = divmod(rem, 60)
+                text = f"{hours}:{minutes:02d}:{seconds:02d}"
             elif hasattr(value, "hour") and hasattr(value, "minute") and not isinstance(value, datetime):
                 # datetime.time cached formula results, etc.
                 text = f"{value.hour}:{value.minute:02d}:00"
@@ -368,9 +386,10 @@ def complete_final(source_path: str, target_path: str) -> None:
         if new_val != cell.value:
             cell.value = new_val
             abbreviated += 1
-        formatted = format_duration(cell.value)
-        if formatted != cell.value:
-            cell.value = formatted
+        excel_time = duration_to_excel_time(cell.value)
+        if excel_time is not None:
+            cell.value = excel_time
+            cell.number_format = _EXCEL_TIME_FORMAT
             reformatted += 1
 
     # Column AN ('Total') must keep the template's array formula
@@ -397,7 +416,7 @@ def complete_final(source_path: str, target_path: str) -> None:
 
     tgt_wb.save(target_path)
     print(f"\nDone. {filled} cells written ({blank} cleared), "
-          f"{abbreviated} abbreviated, {reformatted} time-formatted "
+          f"{abbreviated} abbreviated, {reformatted} durations as Excel times "
           f"-> {target_path}")
     if missing_ids:
         preview = ", ".join(str(x) for x in sorted(missing_ids)[:10])
