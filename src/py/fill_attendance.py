@@ -383,6 +383,34 @@ def build_code_schedule_map(sheet, code_row_map):
     return schedule_map
 
 
+def build_code_status_map(sheet, code_row_map):
+    """Build a dict: employee_code (int) -> normalized employment-status string.
+
+    Employment Status lives in column C (3) of the Nagwa sheet. Values are
+    lower-cased and stripped; empty/missing cells map to ''.
+    """
+    status_map = {}
+    for emp_code, row in code_row_map.items():
+        raw = sheet.cell(row, 3).value
+        if raw is None:
+            status_map[emp_code] = ""
+            continue
+        status_map[emp_code] = str(raw).strip().lower()
+    return status_map
+
+
+def is_absence_exempt(emp_code, schedule_map, status_map):
+    """True if this employee must never be marked absent.
+
+    HR rule: Schedule = Undefined, or Employment Status = Challenged 5%,
+    are not eligible for absence calculations.
+    """
+    if (schedule_map.get(emp_code) or "").strip().lower() == "undefined":
+        return True
+    status = (status_map.get(emp_code) or "").strip().lower()
+    return "challenged" in status and "5%" in status
+
+
 def _coerce_date(value):
     """Best-effort conversion of a cell value into a ``date`` (or None)."""
     if value is None:
@@ -469,8 +497,12 @@ def read_absences():
     return df
 
 
-def fill_absences(sheet, date_col_map, code_row_map):
-    """Fill 'absent' in in/out/shortage for each absence record."""
+def fill_absences(sheet, date_col_map, code_row_map, schedule_map=None, status_map=None):
+    """Fill 'absent' in in/out/shortage for each absence record.
+
+    Employees with Schedule = Undefined or Employment Status = Challenged 5%
+    are skipped (not eligible for absence calculations).
+    """
     print("\nReading Absence Report...")
     absences_df = read_absences()
     print(f"  {len(absences_df)} absence records loaded.")
@@ -478,6 +510,9 @@ def fill_absences(sheet, date_col_map, code_row_map):
     filled = 0
     skipped_code = 0
     skipped_date = 0
+    skipped_exempt = 0
+    schedule_map = schedule_map or {}
+    status_map = status_map or {}
 
     for _, row in absences_df.iterrows():
         try:
@@ -488,6 +523,10 @@ def fill_absences(sheet, date_col_map, code_row_map):
 
         if emp_code not in code_row_map:
             skipped_code += 1
+            continue
+
+        if is_absence_exempt(emp_code, schedule_map, status_map):
+            skipped_exempt += 1
             continue
 
         abs_date_str = str(row["Absence Date"]).strip()
@@ -516,6 +555,11 @@ def fill_absences(sheet, date_col_map, code_row_map):
         print(f"  {skipped_code} rows skipped (employee code not found in Nagwa sheet).")
     if skipped_date:
         print(f"  {skipped_date} rows skipped (date not found in Nagwa sheet).")
+    if skipped_exempt:
+        print(
+            f"  {skipped_exempt} rows skipped "
+            f"(Undefined schedule or Challenged 5% — not eligible for absence)."
+        )
 
 
 def main():
@@ -531,6 +575,7 @@ def main():
     single_date_col_map = build_single_date_column_map(sheet, date_col_map)
     code_row_map = build_code_row_map(sheet)
     code_schedule_map = build_code_schedule_map(sheet, code_row_map)
+    code_status_map = build_code_status_map(sheet, code_row_map)
     code_employment_map = build_code_employment_map(sheet, code_row_map)
 
     print(f"  {len(date_col_map)} workday date columns found.")
@@ -592,7 +637,9 @@ def main():
         print(f"  {skipped_date} rows skipped (date not found in Nagwa sheet).")
 
     # --- Absences ---
-    fill_absences(sheet, date_col_map, code_row_map)
+    fill_absences(
+        sheet, date_col_map, code_row_map, code_schedule_map, code_status_map
+    )
 
     # --- Vacations ---
     fill_vacations(sheet, date_col_map, code_row_map, single_date_col_map)
@@ -619,7 +666,9 @@ def main():
     apply_hour_reduction(sheet, date_col_map, code_row_map)
 
     # --- Missing Punch sweep (final step) ---
-    fill_missing_punches(sheet, date_col_map, code_row_map)
+    fill_missing_punches(
+        sheet, date_col_map, code_row_map, code_schedule_map, code_status_map
+    )
 
     # --- WFH / Workday leave overrides ---
     apply_wfh_and_workday_overrides(sheet, date_col_map, code_row_map)
@@ -629,6 +678,7 @@ def main():
     fill_full_day_absences(
         sheet, date_col_map, code_row_map, code_employment_map,
         coverage_start, coverage_end,
+        code_schedule_map, code_status_map,
     )
 
     wb.save(NAGWA_PATH)
@@ -1596,18 +1646,25 @@ def apply_hour_reduction(sheet, date_col_map, code_row_map):
     print(f"1-hour shortage reductions done! {adjusted} shortage value(s) adjusted.")
 
 
-def fill_missing_punches(sheet, date_col_map, code_row_map):
+def fill_missing_punches(sheet, date_col_map, code_row_map, schedule_map=None, status_map=None):
     """Final sweep: where exactly one of in/out is empty but the other holds a
     real punch time, treat the day as absent.
 
     Earlier leave-rule steps may also mark a row as 'Missing Punch'. Those
     cases are normalized to 'absent' here so the final report receives the
     standard A flag.
+
+    Employees with Schedule = Undefined or Employment Status = Challenged 5%
+    are skipped (not eligible for absence calculations).
     """
     print("\nScanning for missing punches to mark as absences...")
     filled = 0
+    schedule_map = schedule_map or {}
+    status_map = status_map or {}
 
     for emp_code, nagwa_row in code_row_map.items():
+        if is_absence_exempt(emp_code, schedule_map, status_map):
+            continue
         for d, in_col in date_col_map.items():
             out_col = in_col + 1
             leave_col = in_col + 2
@@ -1678,6 +1735,7 @@ def _is_employed_on(employment_map, emp_code, att_date):
 def fill_full_day_absences(
     sheet, date_col_map, code_row_map, employment_map,
     coverage_start=None, coverage_end=None,
+    schedule_map=None, status_map=None,
 ):
     """Closed-world safety net: mark scheduled working days that finished the
     pipeline completely empty as 'absent'.
@@ -1695,7 +1753,9 @@ def fill_full_day_absences(
         WFH/Workday, permission shortages - is left untouched;
       * the employee was actively employed on that date (hire/termination
         window from the Nagwa sheet), so a new hire's pre-hire days and a
-        leaver's post-termination days are not misreported as absences.
+        leaver's post-termination days are not misreported as absences;
+      * the employee is not absence-exempt (Schedule = Undefined or
+        Employment Status = Challenged 5%).
 
     Every cell marked here is, by definition, a working-day absence that was
     NOT captured by the Absence Report, so each one is logged for review.
@@ -1703,8 +1763,12 @@ def fill_full_day_absences(
     print("\nScanning for uncaptured full-day absences...")
     filled = 0
     flagged = []
+    schedule_map = schedule_map or {}
+    status_map = status_map or {}
 
     for emp_code, nagwa_row in code_row_map.items():
+        if is_absence_exempt(emp_code, schedule_map, status_map):
+            continue
         for att_date, in_col in date_col_map.items():
             if coverage_start is not None and att_date < coverage_start:
                 continue

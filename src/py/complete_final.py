@@ -19,7 +19,10 @@ Target workbook: ``Final Nagwa Technologies.xlsx``
 
 For every (employee, date) pair that exists in both workbooks the script
 writes the chosen source value into the corresponding cell of the target
-workbook.  All other cells, formulas and formatting are left untouched.
+workbook.  Column AN (``Total``) keeps the template's array formula; it is
+never overwritten with a static value. Column widths are auto-fitted to
+contents before save. All other cells, formulas and formatting are left
+untouched.
 
 Usage:
     python complete_final.py [-s SOURCE.xlsx] [-t TARGET.xlsx]
@@ -38,6 +41,8 @@ from datetime import datetime, date
 from typing import Dict, Optional
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.formula import ArrayFormula
 
 
 _OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output")
@@ -89,33 +94,6 @@ ABBREVIATIONS: Dict[str, str] = {
 
 
 _DURATION_RE = re.compile(r"^\s*(\d{1,3}):([0-5]?\d)\s*$")
-_DURATION_HMS_RE = re.compile(r"^\s*(\d{1,3}):([0-5]?\d):([0-5]?\d)\s*$")
-
-
-def parse_hms_minutes(value) -> Optional[int]:
-    """Return total minutes for an ``H:MM:SS`` (or ``H:MM``) string.
-
-    Returns ``None`` for any value that is not a recognisable duration
-    (so labels like ``"Annual Leave"`` are silently ignored by the caller).
-    Seconds are rounded to the nearest minute.
-    """
-    if not isinstance(value, str):
-        return None
-    m = _DURATION_HMS_RE.match(value)
-    if m:
-        h, mm, ss = (int(x) for x in m.groups())
-        return h * 60 + mm + (1 if ss >= 30 else 0)
-    m = _DURATION_RE.match(value)
-    if m:
-        h, mm = (int(x) for x in m.groups())
-        return h * 60 + mm
-    return None
-
-
-def minutes_to_hms(total_minutes: int) -> str:
-    """Format ``total_minutes`` as ``H:MM:SS`` (seconds always ``00``)."""
-    h, m = divmod(int(total_minutes), 60)
-    return f"{h}:{m:02d}:00"
 
 
 def format_duration(value):
@@ -272,6 +250,60 @@ def normalise(value):
     return value
 
 
+def autofit_column_widths(sheet, min_width: float = 3.0, max_width: float = 40.0) -> None:
+    """Set each column width to roughly fit its visible cell contents.
+
+    openpyxl cannot ask Excel for true auto-fit, so this uses a character-
+    length heuristic (plus a small padding) and clamps to ``[min_width,
+    max_width]``.
+    """
+    last_row = effective_last_employee_row(sheet, TARGET_FIRST_DATA_ROW)
+    last_col = max(sheet.max_column, TARGET_TOTAL_COL)
+
+    for col in range(1, last_col + 1):
+        longest = 0
+        for row in range(1, last_row + 1):
+            value = sheet.cell(row, col).value
+            if value is None:
+                continue
+            if isinstance(value, ArrayFormula) or (
+                isinstance(value, str) and value.startswith("=")
+            ):
+                # Formulas are not what the user sees; prefer nearby header text.
+                continue
+            if isinstance(value, datetime):
+                text = value.strftime("%d-%b-%y")
+            elif isinstance(value, date):
+                text = value.strftime("%d-%b-%y")
+            elif hasattr(value, "hour") and hasattr(value, "minute") and not isinstance(value, datetime):
+                # datetime.time cached formula results, etc.
+                text = f"{value.hour}:{value.minute:02d}:00"
+            else:
+                text = str(value)
+            if not text:
+                continue
+            for line in text.splitlines() or [text]:
+                longest = max(longest, len(line))
+        if longest == 0:
+            # Fall back to header cells (rows 1-4) when the column is formula-only.
+            for row in range(1, TARGET_FIRST_DATA_ROW):
+                value = sheet.cell(row, col).value
+                if value is None or isinstance(value, ArrayFormula):
+                    continue
+                if isinstance(value, (datetime, date)):
+                    text = value.strftime("%d-%b-%y")
+                elif isinstance(value, str) and value.startswith("="):
+                    continue
+                else:
+                    text = str(value)
+                longest = max(longest, len(text))
+        if longest == 0:
+            continue
+        # Excel width units ≈ character count of the default font; pad a bit.
+        width = min(max(longest + 2, min_width), max_width)
+        sheet.column_dimensions[get_column_letter(col)].width = width
+
+
 def complete_final(source_path: str, target_path: str) -> None:
     print(f"Loading source: {source_path}")
     src_wb = load_workbook(source_path, data_only=True)
@@ -341,20 +373,32 @@ def complete_final(source_path: str, target_path: str) -> None:
             cell.value = formatted
             reformatted += 1
 
-    totals_written = 0
-    for tgt_row in tgt_id_rows.values():
-        total_minutes = 0
-        for col in range(TARGET_FIRST_DATE_COL, TARGET_LAST_DATE_COL + 1):
-            mins = parse_hms_minutes(tgt.cell(tgt_row, col).value)
-            if mins is not None:
-                total_minutes += mins
-        tgt.cell(tgt_row, TARGET_TOTAL_COL).value = minutes_to_hms(total_minutes)
-        totals_written += 1
+    # Column AN ('Total') must keep the template's array formula
+    # (=BYROW sum over the date columns). Do NOT overwrite it with static
+    # totals — that was turning the formula into plain text like '0:16:00'.
+    an_cell = tgt.cell(TARGET_FIRST_DATA_ROW, TARGET_TOTAL_COL)
+    if isinstance(an_cell.value, ArrayFormula) or (
+        isinstance(an_cell.value, str) and an_cell.value.startswith("=")
+    ):
+        print(
+            f"  Preserved Total formula in column "
+            f"{get_column_letter(TARGET_TOTAL_COL)} "
+            f"(row {TARGET_FIRST_DATA_ROW})."
+        )
+    else:
+        print(
+            f"  Warning: no Total formula found in "
+            f"{get_column_letter(TARGET_TOTAL_COL)}{TARGET_FIRST_DATA_ROW}; "
+            f"left cell as-is (value={an_cell.value!r})."
+        )
+
+    print("  Auto-fitting column widths to contents...")
+    autofit_column_widths(tgt)
 
     tgt_wb.save(target_path)
     print(f"\nDone. {filled} cells written ({blank} cleared), "
-          f"{abbreviated} abbreviated, {reformatted} time-formatted, "
-          f"{totals_written} totals -> {target_path}")
+          f"{abbreviated} abbreviated, {reformatted} time-formatted "
+          f"-> {target_path}")
     if missing_ids:
         preview = ", ".join(str(x) for x in sorted(missing_ids)[:10])
         more = "" if len(missing_ids) <= 10 else f" (+{len(missing_ids)-10} more)"
