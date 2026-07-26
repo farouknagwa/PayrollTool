@@ -1,9 +1,11 @@
 import os
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.formula import ArrayFormula
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -354,6 +356,56 @@ def effective_last_employee_row(sheet, first_row=4, id_col=1):
     return max(last, first_row - 1)
 
 
+def autofit_column_widths(sheet, first_data_row=4, min_width=3.0, max_width=40.0):
+    """Set each column width to roughly fit its visible cell contents.
+
+    openpyxl cannot ask Excel for true auto-fit, so this uses a character-
+    length heuristic (plus a small padding) and clamps to ``[min_width,
+    max_width]``.
+    """
+    last_row = effective_last_employee_row(sheet, first_data_row)
+    last_col = sheet.max_column
+
+    for col in range(1, last_col + 1):
+        longest = 0
+        for row in range(1, last_row + 1):
+            value = sheet.cell(row, col).value
+            if value is None:
+                continue
+            if isinstance(value, ArrayFormula) or (
+                isinstance(value, str) and value.startswith("=")
+            ):
+                continue
+            if isinstance(value, datetime):
+                text = value.strftime("%d-%b-%y")
+            elif isinstance(value, date):
+                text = value.strftime("%d-%b-%y")
+            elif hasattr(value, "hour") and hasattr(value, "minute") and not isinstance(value, datetime):
+                text = f"{value.hour}:{value.minute:02d}:00"
+            else:
+                text = str(value)
+            if not text:
+                continue
+            for line in text.splitlines() or [text]:
+                longest = max(longest, len(line))
+        if longest == 0:
+            for row in range(1, first_data_row):
+                value = sheet.cell(row, col).value
+                if value is None or isinstance(value, ArrayFormula):
+                    continue
+                if isinstance(value, (datetime, date)):
+                    text = value.strftime("%d-%b-%y")
+                elif isinstance(value, str) and value.startswith("="):
+                    continue
+                else:
+                    text = str(value)
+                longest = max(longest, len(text))
+        if longest == 0:
+            continue
+        width = min(max(longest + 2, min_width), max_width)
+        sheet.column_dimensions[get_column_letter(col)].width = width
+
+
 def build_code_row_map(sheet):
     """Build a dict: employee_code (int) -> row number in the Nagwa sheet."""
     code_row_map = {}
@@ -680,6 +732,9 @@ def main():
         coverage_start, coverage_end,
         code_schedule_map, code_status_map,
     )
+
+    print("Auto-fitting column widths to contents...")
+    autofit_column_widths(sheet)
 
     wb.save(NAGWA_PATH)
     print(f"\nSaved to {NAGWA_PATH}")
