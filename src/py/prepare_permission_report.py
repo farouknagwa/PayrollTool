@@ -72,10 +72,6 @@ OUTPUT_COLUMNS = [
     "Status",
 ]
 
-# Column widths copied from raw data/Nagwa_Permission_Request_permission_details.xls
-# (xlwt / xlrd units: 1/256 of the zero-character width).
-COLUMN_WIDTHS = [4522, 10240, 4096, 4181, 3541, 3328, 6186, 2602, 5760, 8576, 6058, 2773]
-
 DURATION_COL = OUTPUT_COLUMNS.index("Total Permission Period")
 EMPLOYEE_CODE_COL = OUTPUT_COLUMNS.index("Employee Code")
 
@@ -303,8 +299,18 @@ def write_xls(df: pd.DataFrame, path: str) -> None:
     header_style = _header_style()
     duration_style = _duration_style()
 
-    for col_idx, width in enumerate(COLUMN_WIDTHS):
-        sheet.col(col_idx).width = width
+    # Fit each column to its longest visible value (header or data) plus padding.
+    # xlwt width unit = 1/256 of the width of '0' in the default font.
+    padding_chars = 2
+    min_chars = 3
+    for col_idx, col_name in enumerate(OUTPUT_COLUMNS):
+        longest = len(str(col_name))
+        if col_name in df.columns:
+            for value in df[col_name]:
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    continue
+                longest = max(longest, len(str(value)))
+        sheet.col(col_idx).width = max(longest + padding_chars, min_chars) * 256
 
     _set_row_height(sheet, 0)
     for col_idx, header in enumerate(OUTPUT_COLUMNS):

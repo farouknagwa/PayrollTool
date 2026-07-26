@@ -63,6 +63,19 @@ TARGET_FIRST_DATA_ROW = 5
 TARGET_FIRST_DATE_COL = 9   # column I
 TARGET_LAST_DATE_COL = 39   # column AM
 TARGET_TOTAL_COL = 40       # column AN ('Total')
+TARGET_ONE_HOUR_COL = 41    # column AO ('1 hour')
+TARGET_BUS_DELAYS_COL = 42  # column AP ('Bus Delays')
+TARGET_FINAL_DELAYS_COL = 43  # column AQ ('Final Delays')
+
+# Hardened Final-Delays formula: coerce AN/AO/AP with N() so blank-row
+# empty strings from the AN/AO IF formulas do not produce #VALUE!, and
+# only emit a result when column A has an employee id.
+FINAL_DELAYS_FORMULA = (
+    '=IF(A5:A9998="","",'
+    'LET(v,(N(AN5:AN9998)-N(AO5:AO9998)-N(AP5:AP9998))*24,'
+    'IF(v<0,0,v)))'
+)
+FINAL_DELAYS_FORMULA_REF = "AQ5:AQ9998"
 
 
 def effective_last_employee_row(sheet, first_row: int, id_col: int = 1) -> int:
@@ -262,12 +275,12 @@ def normalise(value):
     return value
 
 
-def autofit_column_widths(sheet, min_width: float = 3.0, max_width: float = 40.0) -> None:
-    """Set each column width to roughly fit its visible cell contents.
+def autofit_column_widths(sheet, min_width: float = 3.0, padding: float = 2.0) -> None:
+    """Set each column width to fit its visible contents plus ``padding``.
 
     openpyxl cannot ask Excel for true auto-fit, so this uses a character-
-    length heuristic (plus a small padding) and clamps to ``[min_width,
-    max_width]``.
+    length heuristic. Every used column gets ``longest_content + padding``
+    (at least ``min_width``) with no artificial maximum.
     """
     last_row = effective_last_employee_row(sheet, TARGET_FIRST_DATA_ROW)
     last_col = max(sheet.max_column, TARGET_TOTAL_COL)
@@ -317,9 +330,42 @@ def autofit_column_widths(sheet, min_width: float = 3.0, max_width: float = 40.0
                 longest = max(longest, len(text))
         if longest == 0:
             continue
-        # Excel width units ≈ character count of the default font; pad a bit.
-        width = min(max(longest + 2, min_width), max_width)
-        sheet.column_dimensions[get_column_letter(col)].width = width
+        sheet.column_dimensions[get_column_letter(col)].width = max(
+            longest + padding, min_width
+        )
+
+
+def repair_final_delays_formulas(sheet) -> None:
+    """Fix AQ Final-Delays formulas that #VALUE! on blank / non-numeric cells.
+
+    The template computes ``(AN - AO - AP) * 24``. AN/AO return ``""`` on rows
+    with no employee id, and ``"" - ""`` is #VALUE! in Excel. That error then
+    also breaks ``AQ2`` (``SUBTOTAL`` over the AQ body).
+
+    Rewrite AQ5 as an array formula that:
+      * returns blank when column A is blank;
+      * uses ``N(...)`` so blank/text cells count as 0 in the arithmetic;
+      * clamps negatives to 0 (same as the template).
+
+    Also point AQ2's SUBTOTAL at the actual employee block.
+    """
+    last_row = effective_last_employee_row(sheet, TARGET_FIRST_DATA_ROW)
+    aq5 = sheet.cell(TARGET_FIRST_DATA_ROW, TARGET_FINAL_DELAYS_COL)
+    # Preserve existing number format from the template.
+    existing_format = aq5.number_format
+    aq5.value = ArrayFormula(
+        ref=FINAL_DELAYS_FORMULA_REF,
+        text=FINAL_DELAYS_FORMULA,
+    )
+    if existing_format:
+        aq5.number_format = existing_format
+
+    aq2 = sheet.cell(2, TARGET_FINAL_DELAYS_COL)
+    aq2.value = f"=SUBTOTAL(9,AQ{TARGET_FIRST_DATA_ROW}:AQ{last_row})"
+    print(
+        f"  Repaired Final Delays formulas: AQ{TARGET_FIRST_DATA_ROW} array + "
+        f"AQ2 SUBTOTAL through row {last_row}."
+    )
 
 
 def complete_final(source_path: str, target_path: str) -> None:
@@ -410,6 +456,8 @@ def complete_final(source_path: str, target_path: str) -> None:
             f"{get_column_letter(TARGET_TOTAL_COL)}{TARGET_FIRST_DATA_ROW}; "
             f"left cell as-is (value={an_cell.value!r})."
         )
+
+    repair_final_delays_formulas(tgt)
 
     print("  Auto-fitting column widths to contents...")
     autofit_column_widths(tgt)

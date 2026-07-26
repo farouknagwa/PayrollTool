@@ -356,12 +356,13 @@ def effective_last_employee_row(sheet, first_row=4, id_col=1):
     return max(last, first_row - 1)
 
 
-def autofit_column_widths(sheet, first_data_row=4, min_width=3.0, max_width=40.0):
-    """Set each column width to roughly fit its visible cell contents.
+def autofit_column_widths(sheet, first_data_row=4, min_width=3.0, padding=2.0):
+    """Set each column width to fit its visible contents plus ``padding``.
 
     openpyxl cannot ask Excel for true auto-fit, so this uses a character-
-    length heuristic (plus a small padding) and clamps to ``[min_width,
-    max_width]``.
+    length heuristic. Every used column gets ``longest_content + padding``
+    (at least ``min_width``) with no artificial maximum, so long Leave text
+    is not clipped.
     """
     last_row = effective_last_employee_row(sheet, first_data_row)
     last_col = sheet.max_column
@@ -402,8 +403,9 @@ def autofit_column_widths(sheet, first_data_row=4, min_width=3.0, max_width=40.0
                 longest = max(longest, len(text))
         if longest == 0:
             continue
-        width = min(max(longest + 2, min_width), max_width)
-        sheet.column_dimensions[get_column_letter(col)].width = width
+        sheet.column_dimensions[get_column_letter(col)].width = max(
+            longest + padding, min_width
+        )
 
 
 def build_code_row_map(sheet):
