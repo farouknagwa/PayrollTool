@@ -1,8 +1,8 @@
 import type { PayrollSettings } from "../core/types";
 
 export const DEFAULT_SETTINGS: PayrollSettings = {
-  ramadanStart: "2026-02-20",
-  ramadanEnd: "2026-03-18",
+  ramadanStart: "2027-02-07",
+  ramadanEnd: "2027-03-09",
   workdayStart: "08:00",
   workdayEndNormal: "16:00",
   workdayEndRamadan: "14:30",
@@ -26,6 +26,7 @@ export const DEFAULT_SETTINGS: PayrollSettings = {
     },
   ],
   lunchWindowSwitchDate: "2026-04-26",
+  lunchWindowSwitchDateCancel: "2026-10-30",
   lunchWindowBefore: {
     start: "12:00",
     end: "13:00",

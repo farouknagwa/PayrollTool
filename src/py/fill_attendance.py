@@ -124,17 +124,31 @@ PERMITTED_WINDOW_END_RESTRICTED = time(16, 0)  # 4:00 PM
 # --- Work-Mission lunch-gap exemption ---
 # When an employee has at least one Work Mission entry on a given day, any
 # uncovered minutes that fall inside the lunch window are not counted as
-# shortage. The lunch window itself shifts on 26 Apr 2026:
-#   * Before 26 Apr 2026:        12:00 PM – 1:00 PM
-#   * On / after 26 Apr 2026:    12:30 PM – 1:30 PM
+# shortage. The lunch window shifts between two dates:
+#   * Before switch (default 26 Apr 2026):           12:00 PM – 1:00 PM
+#   * Switch date inclusive until cancel exclusive
+#     (default 26 Apr 2026 – 29 Oct 2026):           12:30 PM – 1:30 PM
+#   * On / after cancel (default 30 Oct 2026):       12:00 PM – 1:00 PM
+# If cancel is None, the shifted window stays in force from the switch date on.
 LUNCH_WINDOW_SWITCH_DATE = datetime(2026, 4, 26).date()
+LUNCH_WINDOW_SWITCH_DATE_CANCEL = datetime(2026, 10, 30).date()
 LUNCH_WINDOW_BEFORE = (time(12, 0), time(13, 0))
 LUNCH_WINDOW_FROM = (time(12, 30), time(13, 30))
 
 
 def _lunch_window_for(att_date):
-    """Return the (start, end) lunch window applicable on ``att_date``."""
+    """Return the (start, end) lunch window applicable on ``att_date``.
+
+    Uses the shifted window (``LUNCH_WINDOW_FROM``) when
+    ``switch <= att_date < cancel``. If ``cancel`` is None, every date on or
+    after ``switch`` uses the shifted window.
+    """
     if att_date is None or att_date < LUNCH_WINDOW_SWITCH_DATE:
+        return LUNCH_WINDOW_BEFORE
+    if (
+        LUNCH_WINDOW_SWITCH_DATE_CANCEL is not None
+        and att_date >= LUNCH_WINDOW_SWITCH_DATE_CANCEL
+    ):
         return LUNCH_WINDOW_BEFORE
     return LUNCH_WINDOW_FROM
 
@@ -1571,8 +1585,9 @@ def apply_work_mission_lunch_exemption(sheet, date_col_map, code_row_map):
     """Exempt the lunch hour from shortage on Work-Mission days.
 
     For any day where the Leave column contains at least one Work Mission
-    entry, the relevant lunch window (12:00 PM - 1:00 PM before 26 Apr 2026,
-    12:30 PM - 1:30 PM from that date on) is treated as covered: minutes
+    entry, the relevant lunch window (``LUNCH_WINDOW_BEFORE`` outside
+    ``[switch, cancel)``, ``LUNCH_WINDOW_FROM`` inside it) is treated as
+    covered: minutes
     inside the window that are NOT already covered by the employee's punch
     interval or by any leave entry are subtracted from the current shortage.
     Non-numeric shortage cells ('Missing Punch', 'Public Holiday', vacation

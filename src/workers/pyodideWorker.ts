@@ -265,6 +265,8 @@ fill_attendance.SPECIAL_RULE_ANCHOR = _pairs[0][2]
 fill_attendance.SPECIAL_RULE_EMPLOYEES = {employee for pair in _pairs for employee in pair[:2]}
 
 fill_attendance.LUNCH_WINDOW_SWITCH_DATE = _date(_settings["lunchWindowSwitchDate"])
+_cancel = _settings.get("lunchWindowSwitchDateCancel")
+fill_attendance.LUNCH_WINDOW_SWITCH_DATE_CANCEL = None if not _cancel else _date(_cancel)
 fill_attendance.LUNCH_WINDOW_BEFORE = (_time(_settings["lunchWindowBefore"]["start"]), _time(_settings["lunchWindowBefore"]["end"]))
 fill_attendance.LUNCH_WINDOW_FROM = (_time(_settings["lunchWindowFrom"]["start"]), _time(_settings["lunchWindowFrom"]["end"]))
 fill_attendance.HOUR_REDUCTION_WINDOWS = {

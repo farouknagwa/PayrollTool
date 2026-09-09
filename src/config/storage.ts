@@ -35,6 +35,11 @@ export function normalizeSettings(input: Partial<PayrollSettings>): PayrollSetti
       ...defaults.lunchWindowFrom,
       ...(input.lunchWindowFrom ?? {}),
     },
+    lunchWindowSwitchDateCancel: !("lunchWindowSwitchDateCancel" in input)
+      ? defaults.lunchWindowSwitchDateCancel
+      : input.lunchWindowSwitchDateCancel
+        ? input.lunchWindowSwitchDateCancel
+        : null,
   };
   return merged;
 }
@@ -43,6 +48,12 @@ export function validateSettings(settings: PayrollSettings): string[] {
   const errors: string[] = [];
   if (compareISO(settings.ramadanStart, settings.ramadanEnd) > 0) {
     errors.push("Ramadan start date must be on or before Ramadan end date.");
+  }
+  if (
+    settings.lunchWindowSwitchDateCancel &&
+    compareISO(settings.lunchWindowSwitchDateCancel, settings.lunchWindowSwitchDate) <= 0
+  ) {
+    errors.push("Lunch switch cancel date must be after lunch switch date.");
   }
   const timeFields = [
     ["Workday start", settings.workdayStart],

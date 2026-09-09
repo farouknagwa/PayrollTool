@@ -40,6 +40,7 @@ export interface PayrollSettings {
   defaultScheduleWindowEnd: string;
   specialRulePairs: SpecialRulePair[];
   lunchWindowSwitchDate: ISODate;
+  lunchWindowSwitchDateCancel: ISODate | null;
   lunchWindowBefore: TimeWindow;
   lunchWindowFrom: TimeWindow;
   hourReductionWindows: HourReductionWindow[];
