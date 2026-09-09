@@ -388,13 +388,13 @@ function App() {
                   : null,
               })}
             />
-            <TextInput label="Lunch before start" value={settings.lunchWindowBefore.start} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, start: value } })} />
-            <TextInput label="Lunch before end" value={settings.lunchWindowBefore.end} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, end: value } })} />
-            <TextInput label="Lunch from start" value={settings.lunchWindowFrom.start} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, start: value } })} />
-            <TextInput label="Lunch from end" value={settings.lunchWindowFrom.end} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, end: value } })} />
+            <TextInput label="Lunch start" value={settings.lunchWindowBefore.start} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, start: value } })} />
+            <TextInput label="Lunch end" value={settings.lunchWindowBefore.end} onChange={(value) => updateSettings({ ...settings, lunchWindowBefore: { ...settings.lunchWindowBefore, end: value } })} />
+            <TextInput label="Summer Lunch start" value={settings.lunchWindowFrom.start} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, start: value } })} />
+            <TextInput label="Summer Lunch end" value={settings.lunchWindowFrom.end} onChange={(value) => updateSettings({ ...settings, lunchWindowFrom: { ...settings.lunchWindowFrom, end: value } })} />
           </div>
           <p className="helper-text">
-            Work-Mission lunch uses “Lunch from” from the switch date up to (but not including) the cancel date. Outside that range it uses “Lunch before”. Clear the cancel date to keep the shifted lunch from the switch date onward.
+            Work-Mission lunch uses “Summer Lunch” from the switch date up to (but not including) the cancel date. Outside that range it uses “Lunch”. Clear the cancel date to keep Summer Lunch from the switch date onward.
           </p>
 
           <div className="rule-columns">

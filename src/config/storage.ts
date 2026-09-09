@@ -63,10 +63,10 @@ export function validateSettings(settings: PayrollSettings): string[] {
     ["Ramadan permitted window end", settings.permittedWindowEndRamadan],
     ["Restricted permitted window end", settings.permittedWindowEndRestricted],
     ["Default schedule window end", settings.defaultScheduleWindowEnd],
-    ["Lunch before start", settings.lunchWindowBefore.start],
-    ["Lunch before end", settings.lunchWindowBefore.end],
-    ["Lunch from start", settings.lunchWindowFrom.start],
-    ["Lunch from end", settings.lunchWindowFrom.end],
+    ["Lunch start", settings.lunchWindowBefore.start],
+    ["Lunch end", settings.lunchWindowBefore.end],
+    ["Summer Lunch start", settings.lunchWindowFrom.start],
+    ["Summer Lunch end", settings.lunchWindowFrom.end],
   ];
   for (const [label, value] of timeFields) {
     if (!isTime(value)) errors.push(`${label} must be HH:MM.`);
