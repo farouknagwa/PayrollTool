@@ -2,7 +2,7 @@ import { DEFAULT_SETTINGS } from "./defaults";
 import { compareISO } from "../core/dateTime";
 import type { PayrollSettings } from "../core/types";
 
-const STORAGE_KEY = "payrolltool.settings.v1";
+const LEGACY_STORAGE_KEY = "payrolltool.settings.v1";
 
 function isTime(value: string): boolean {
   return /^\d{1,2}:[0-5]\d$/.test(value);
@@ -97,25 +97,17 @@ export function validateSettings(settings: PayrollSettings): string[] {
   return errors;
 }
 
-export function loadSettings(): PayrollSettings {
-  if (typeof localStorage === "undefined") return cloneDefaultSettings();
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return cloneDefaultSettings();
-  try {
-    return normalizeSettings(JSON.parse(raw) as Partial<PayrollSettings>);
-  } catch {
-    return cloneDefaultSettings();
-  }
+function clearLegacyBrowserSettings(): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
-export function saveSettings(settings: PayrollSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+export function loadSettings(): PayrollSettings {
+  clearLegacyBrowserSettings();
+  return cloneDefaultSettings();
 }
 
 export function resetSettings(): PayrollSettings {
-  const defaults = cloneDefaultSettings();
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaults));
-  }
-  return defaults;
+  clearLegacyBrowserSettings();
+  return cloneDefaultSettings();
 }

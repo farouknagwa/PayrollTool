@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { saveAs } from "file-saver";
 import "./App.css";
-import { loadSettings, resetSettings, saveSettings, validateSettings } from "./config/storage";
+import { loadSettings, resetSettings, validateSettings } from "./config/storage";
 import { computePeriod } from "./core/dateTime";
 import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
 import { missingRequiredInputs, permissionMode } from "./io/files";
@@ -159,7 +159,6 @@ function App() {
 
   function updateSettings(next: PayrollSettings) {
     setSettings(next);
-    saveSettings(next);
   }
 
   function getWorker(): Worker {
