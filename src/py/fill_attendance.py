@@ -1770,13 +1770,20 @@ def apply_hour_reduction(sheet, date_col_map, code_row_map):
     print(f"1-hour shortage reductions done! {adjusted} shortage value(s) adjusted.")
 
 
-def fill_missing_punches(sheet, date_col_map, code_row_map, schedule_map=None, status_map=None):
-    """Final sweep: where exactly one of in/out is empty but the other holds a
-    real punch time, treat the day as absent.
+def _keep_punch_or_missing(value):
+    """Keep a real punch time; otherwise label the cell Missing Punch."""
+    if parse_time_value(value) is not None:
+        return value
+    return "Missing Punch"
 
-    Earlier leave-rule steps may also mark a row as 'Missing Punch'. Those
-    cases are normalized to 'absent' here so the final report receives the
-    standard A flag.
+
+def fill_missing_punches(sheet, date_col_map, code_row_map, schedule_map=None, status_map=None):
+    """Final sweep: treat a missing In or Out as an absence, but keep the
+    surviving punch visible.
+
+    Shortage becomes 'absent' so the Final report still receives A. In/Out
+    keep any real punch time; the empty or 'Missing Punch' side is labeled
+    Missing Punch (not overwritten with absent).
 
     Employees with Schedule = Undefined or Employment Status = Challenged 5%
     are skipped (not eligible for absence calculations).
@@ -1806,28 +1813,22 @@ def fill_missing_punches(sheet, date_col_map, code_row_map, schedule_map=None, s
             if "work mission" in leave_str.lower() and re.match(r"^\d+:\d{2}$", shortage_str):
                 continue
 
-            if "Missing Punch" in (in_str, out_str, shortage_str):
-                sheet.cell(nagwa_row, in_col).value = "absent"
-                sheet.cell(nagwa_row, out_col).value = "absent"
-                sheet.cell(nagwa_row, shortage_col).value = "absent"
-                filled += 1
-                continue
-
+            has_missing_label = "Missing Punch" in (in_str, out_str, shortage_str)
             in_blank = in_str in ("", "nan", "None")
             out_blank = out_str in ("", "nan", "None")
-
-            if in_blank == out_blank:
+            one_punch = (
+                in_blank != out_blank
+                and (
+                    parse_time_value(out_str) is not None
+                    if in_blank
+                    else parse_time_value(in_str) is not None
+                )
+            )
+            if not has_missing_label and not one_punch:
                 continue
 
-            if in_blank:
-                if parse_time_value(out_str) is None:
-                    continue
-            else:
-                if parse_time_value(in_str) is None:
-                    continue
-
-            sheet.cell(nagwa_row, in_col).value = "absent"
-            sheet.cell(nagwa_row, out_col).value = "absent"
+            sheet.cell(nagwa_row, in_col).value = _keep_punch_or_missing(in_val)
+            sheet.cell(nagwa_row, out_col).value = _keep_punch_or_missing(out_val)
             sheet.cell(nagwa_row, shortage_col).value = "absent"
             filled += 1
 
