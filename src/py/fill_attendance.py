@@ -86,6 +86,8 @@ RAMADAN_START = datetime(2026, 2, 20).date()
 RAMADAN_END = datetime(2026, 3, 18).date()
 FULL_DAY_NORMAL = 8 * 60        # 480 minutes
 FULL_DAY_RAMADAN = 6 * 60 + 30  # 390 minutes
+NO_PUNCH_HALFDAY_CREDIT_NORMAL = 4 * 60        # 240 minutes
+NO_PUNCH_HALFDAY_CREDIT_RAMADAN = 3 * 60 + 30  # 210 minutes
 
 PERMITTED_WINDOW_END_NORMAL = time(18, 0)    # 6:00 PM
 PERMITTED_WINDOW_END_RAMADAN = time(16, 30)  # 4:30 PM
@@ -1385,6 +1387,36 @@ _HALFDAY_CATEGORIES = (
 )
 
 
+def _apply_no_punch_halfday_shortage(sheet, nagwa_row, shortage_col, parsed_entries, d):
+    """Write shortage for a half-day day with no In and no Out punches.
+
+    Credits a fixed half-day (4:00, or 3:30 in Ramadan) plus every same-day
+    Permission duration against the full working day. Permitted Delays are
+    left to ``apply_permitted_delays``. In/Out cells are not written.
+    """
+    if d and RAMADAN_START <= d <= RAMADAN_END:
+        full_day = FULL_DAY_RAMADAN
+        half_day_credit = NO_PUNCH_HALFDAY_CREDIT_RAMADAN
+    else:
+        full_day = FULL_DAY_NORMAL
+        half_day_credit = NO_PUNCH_HALFDAY_CREDIT_NORMAL
+    permission_minutes = 0
+    for parsed in parsed_entries:
+        if parsed is None:
+            continue
+        _leave_type, leave_start, leave_end, category = parsed
+        if category != "permission":
+            continue
+        if leave_start is None or leave_end is None:
+            continue
+        duration = _time_to_min(leave_end) - _time_to_min(leave_start)
+        if duration > 0:
+            permission_minutes += duration
+    shortage = max(0, full_day - half_day_credit - permission_minutes)
+    sheet.cell(nagwa_row, shortage_col).value = minutes_to_hhmm(shortage)
+    return True
+
+
 def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_schedule_map=None):
     """Analyse the Leave column and conditionally override shortage values.
 
@@ -1398,6 +1430,11 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
     subsequent permission-style entry then subtracts its duration from the
     running shortage value. A later half-day-style entry re-redefines the
     shortage using its own window rule.
+
+    A half-day day with both In and Out blank is handled once as a numeric
+    shortage (full day minus the fixed half-day credit minus Permission).
+    One-punch and punched half-days keep the existing window / Missing Punch
+    paths.
     """
     print("\nRecalculating shortage based on leave rules...")
     warnings = []
@@ -1444,6 +1481,21 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                 p is not None and p[3] in _HALFDAY_CATEGORIES
                 for p in parsed_entries
             )
+
+            in_val = sheet.cell(nagwa_row, in_col).value
+            out_val = sheet.cell(nagwa_row, in_col + 1).value
+            if (
+                has_halfday
+                and in_time is None
+                and out_time is None
+                and _cell_is_blank(in_val)
+                and _cell_is_blank(out_val)
+            ):
+                if _apply_no_punch_halfday_shortage(
+                    sheet, nagwa_row, shortage_col, parsed_entries, d,
+                ):
+                    overridden += 1
+                continue
 
             rule_applied = False
             any_change = False
