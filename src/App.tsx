@@ -80,7 +80,6 @@ function summaryCards(summary: OutputSummary) {
       title: "Nagwa Technologies",
       rows: [
         ["Workdays", summary.nagwa.workdays],
-        ["Days with numeric shortage", summary.nagwa.numericShortageDays],
         ["Total shortage hours", summary.nagwa.totalShortageHours],
         ["Days marked absent", summary.nagwa.absentDays],
         ["Half-day no-punch days", summary.nagwa.halfDayNoPunchDays],
@@ -92,7 +91,6 @@ function summaryCards(summary: OutputSummary) {
       title: "Final Nagwa Technologies",
       rows: [
         ["Days marked A", summary.final.aDays],
-        ["Days written as duration", summary.final.durationDays],
       ] as Array<[string, string | number]>,
     },
     {
