@@ -457,7 +457,65 @@ def _autosize(sheet, ncols: int, min_w: float = 10, max_w: float = 48) -> None:
         sheet.column_dimensions[letter].width = longest
 
 
-def _write_table(sheet, headers: List[str], rows: List[List[Any]], date_cols: List[int]) -> None:
+def _iso_date(value) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return _cell_text(value)
+
+
+def _join_unique(values) -> str:
+    seen = set()
+    ordered = []
+    for value in values:
+        text = _cell_text(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered.append(text)
+    return " | ".join(ordered)
+
+
+def aggregate_by_employee(
+    rows: List[Dict[str, Any]],
+    duration_fields: Tuple[str, ...] = (),
+    text_fields: Tuple[str, ...] = (),
+) -> List[Dict[str, Any]]:
+    """Collapse day-level review rows to one row per employee code."""
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["code"], []).append(row)
+
+    aggregated: List[Dict[str, Any]] = []
+    for code, group in grouped.items():
+        group.sort(key=lambda item: item.get("date") or date.min)
+        name = sorted(group, key=lambda item: (str(item.get("name") or "").lower(), item.get("date") or date.min))[0].get("name") or ""
+        item: Dict[str, Any] = {
+            "code": code,
+            "name": name,
+            "days": len(group),
+            "dates": " | ".join(_iso_date(row.get("date")) for row in group),
+        }
+        for field in duration_fields:
+            item[field] = minutes_to_hhmm(
+                sum(_parse_duration_minutes(row.get(field)) for row in group)
+            )
+        for field in text_fields:
+            item[field] = _join_unique(row.get(field) for row in group)
+        aggregated.append(item)
+    aggregated.sort(key=lambda item: (str(item.get("name") or "").lower(), item.get("code") or 0))
+    return aggregated
+
+
+def _write_table(
+    sheet,
+    headers: List[str],
+    rows: List[List[Any]],
+    date_cols: List[int],
+    center_through: int = 4,
+    max_w: float = 48,
+) -> None:
     sheet.append(headers)
     _style_header(sheet, len(headers))
     for row in rows:
@@ -467,11 +525,11 @@ def _write_table(sheet, headers: List[str], rows: List[List[Any]], date_cols: Li
         for c in range(1, len(headers) + 1):
             cell = sheet.cell(r, c)
             cell.border = THIN
-            cell.alignment = CENTER if c in date_cols or c <= 4 else LEFT
+            cell.alignment = CENTER if c in date_cols or c <= center_through else LEFT
         for c in date_cols:
             sheet.cell(r, c).number_format = "yyyy-mm-dd"
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{last}"
-    _autosize(sheet, len(headers))
+    _autosize(sheet, len(headers), max_w=max_w)
 
 
 def _write_summary_sheet(sheet, summary: Dict[str, Any]) -> None:
@@ -534,6 +592,21 @@ def write(
         ],
         date_cols=[3],
     )
+    halfday_agg = aggregate_by_employee(
+        COLLECTOR.halfday_no_punches,
+        duration_fields=("half_day_credit", "permission", "permitted_delays", "final_shortage"),
+    )
+    _write_table(
+        wb.create_sheet("Half-day no punches_aggregated"),
+        ["Employee Code", "Name", "Days", "Dates", "Half-day credit", "Permission", "Permitted Delays", "Final shortage"],
+        [
+            [r["code"], r["name"], r["days"], r["dates"], r["half_day_credit"], r["permission"], r["permitted_delays"], r["final_shortage"]]
+            for r in halfday_agg
+        ],
+        date_cols=[],
+        center_through=3,
+        max_w=60,
+    )
 
     missing_sheet = wb.create_sheet("Missing punch")
     _write_table(
@@ -544,6 +617,21 @@ def write(
             for r in COLLECTOR.missing_punch
         ],
         date_cols=[3],
+    )
+    missing_agg = aggregate_by_employee(
+        COLLECTOR.missing_punch,
+        text_fields=("missing_side",),
+    )
+    _write_table(
+        wb.create_sheet("Missing punch_aggregated"),
+        ["Employee Code", "Name", "Days", "Dates", "Missing side"],
+        [
+            [r["code"], r["name"], r["days"], r["dates"], r["missing_side"]]
+            for r in missing_agg
+        ],
+        date_cols=[],
+        center_through=3,
+        max_w=60,
     )
 
     other_sheet = wb.create_sheet("Other absences")
@@ -556,6 +644,21 @@ def write(
         ],
         date_cols=[3],
     )
+    other_agg = aggregate_by_employee(
+        COLLECTOR.other_absences,
+        text_fields=("source",),
+    )
+    _write_table(
+        wb.create_sheet("Other absences_aggregated"),
+        ["Employee Code", "Name", "Days", "Dates", "Source"],
+        [
+            [r["code"], r["name"], r["days"], r["dates"], r["source"]]
+            for r in other_agg
+        ],
+        date_cols=[],
+        center_through=3,
+        max_w=60,
+    )
 
     pd_sheet = wb.create_sheet("Unused permitted delay")
     _write_table(
@@ -566,6 +669,21 @@ def write(
             for r in COLLECTOR.unused_pd
         ],
         date_cols=[3],
+    )
+    pd_agg = aggregate_by_employee(
+        COLLECTOR.unused_pd,
+        duration_fields=("actual_delay", "pd_granted", "extra", "shortage_after"),
+    )
+    _write_table(
+        wb.create_sheet("Unused permitted delay_agg"),
+        ["Employee Code", "Name", "Days", "Dates", "Actual delay", "PD granted", "Extra", "Shortage after"],
+        [
+            [r["code"], r["name"], r["days"], r["dates"], r["actual_delay"], r["pd_granted"], r["extra"], r["shortage_after"]]
+            for r in pd_agg
+        ],
+        date_cols=[],
+        center_through=3,
+        max_w=60,
     )
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
