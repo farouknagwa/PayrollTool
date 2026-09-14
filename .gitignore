@@ -26,3 +26,7 @@ dist-ssr
 # Python
 __pycache__/
 *.py[cod]
+
+# Local Teams notify logs
+notify/Teams notify log.xlsx
+notify/*notify log*.xlsx
