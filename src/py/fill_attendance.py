@@ -7,6 +7,11 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.formula import ArrayFormula
 
+try:
+    from scripts import review_report
+except ImportError:
+    import review_report
+
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -618,6 +623,7 @@ def fill_absences(sheet, date_col_map, code_row_map, schedule_map=None, status_m
         sheet.cell(nagwa_row, in_col).value = "absent"
         sheet.cell(nagwa_row, out_col).value = "absent"
         sheet.cell(nagwa_row, shortage_col).value = "absent"
+        review_report.remember_absence_source(emp_code, abs_date, "Absence report")
         filled += 1
 
     print(f"\nAbsences done! {filled} day-cells filled.")
@@ -632,7 +638,14 @@ def fill_absences(sheet, date_col_map, code_row_map, schedule_map=None, status_m
         )
 
 
+def _employee_display_name(sheet, nagwa_row):
+    """Preferred Name from column B, used only for the review index."""
+    value = sheet.cell(nagwa_row, 2).value
+    return "" if value is None else str(value).strip()
+
+
 def main():
+    review_report.reset()
     print("Reading Attendance Report...")
     attendance_df = read_attendance()
     print(f"  {len(attendance_df)} attendance records loaded.")
@@ -750,6 +763,8 @@ def main():
         coverage_start, coverage_end,
         code_schedule_map, code_status_map,
     )
+
+    review_report.finalize_from_sheet(sheet, date_col_map, code_row_map)
 
     print("Auto-fitting column widths to contents...")
     autofit_column_widths(sheet)
@@ -1413,8 +1428,13 @@ def _apply_no_punch_halfday_shortage(sheet, nagwa_row, shortage_col, parsed_entr
         if duration > 0:
             permission_minutes += duration
     shortage = max(0, full_day - half_day_credit - permission_minutes)
-    sheet.cell(nagwa_row, shortage_col).value = minutes_to_hhmm(shortage)
-    return True
+    shortage_text = minutes_to_hhmm(shortage)
+    sheet.cell(nagwa_row, shortage_col).value = shortage_text
+    return {
+        "credit_minutes": half_day_credit,
+        "permission_minutes": permission_minutes,
+        "shortage": shortage_text,
+    }
 
 
 def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_schedule_map=None):
@@ -1491,9 +1511,33 @@ def recalculate_shortage_from_leave(sheet, date_col_map, code_row_map, code_sche
                 and _cell_is_blank(in_val)
                 and _cell_is_blank(out_val)
             ):
-                if _apply_no_punch_halfday_shortage(
+                applied = _apply_no_punch_halfday_shortage(
                     sheet, nagwa_row, shortage_col, parsed_entries, d,
-                ):
+                )
+                if applied:
+                    pd_minutes = 0
+                    for parsed in parsed_entries:
+                        if parsed is None:
+                            continue
+                        leave_type, leave_start, leave_end, _category = parsed
+                        if not is_permitted_delay_type(leave_type):
+                            continue
+                        if leave_start is None or leave_end is None:
+                            continue
+                        duration = _time_to_min(leave_end) - _time_to_min(leave_start)
+                        if duration > 0:
+                            pd_minutes += duration
+                    leave_text = sheet.cell(nagwa_row, leave_col).value
+                    review_report.remember_halfday(
+                        emp_code,
+                        _employee_display_name(sheet, nagwa_row),
+                        d,
+                        "" if leave_text is None else str(leave_text).strip(),
+                        applied["credit_minutes"],
+                        applied["permission_minutes"],
+                        pd_minutes,
+                        applied["shortage"],
+                    )
                     overridden += 1
                 continue
 
@@ -1595,6 +1639,7 @@ def apply_permitted_delays(sheet, date_col_map, code_row_map):
             if not raw_entries:
                 continue
 
+            delay_minutes_list = []
             for raw_entry in raw_entries:
                 try:
                     leave_type, leave_start, leave_end = parse_leave_cell(raw_entry)
@@ -1606,6 +1651,8 @@ def apply_permitted_delays(sheet, date_col_map, code_row_map):
 
                 if "permitted delays" not in leave_type.lower():
                     continue
+                if leave_start is None or leave_end is None:
+                    continue
 
                 delay_minutes = _time_to_min(leave_end) - _time_to_min(leave_start)
                 if delay_minutes <= 0:
@@ -1615,16 +1662,41 @@ def apply_permitted_delays(sheet, date_col_map, code_row_map):
                         f"({leave_start} -> {leave_end})"
                     )
                     continue
+                delay_minutes_list.append(delay_minutes)
 
+            if not delay_minutes_list:
+                continue
+
+            current_shortage = sheet.cell(nagwa_row, shortage_col).value
+            current_str = "" if current_shortage is None else str(current_shortage).strip()
+            if not re.match(r"^\d+:\d{2}$", current_str):
+                continue
+            current_minutes = parse_duration(current_str)
+            granted_minutes = sum(delay_minutes_list)
+            extra_minutes = max(0, granted_minutes - current_minutes)
+            leave_text = sheet.cell(nagwa_row, leave_col).value
+
+            for delay_minutes in delay_minutes_list:
                 current_shortage = sheet.cell(nagwa_row, shortage_col).value
                 current_str = "" if current_shortage is None else str(current_shortage).strip()
                 if not re.match(r"^\d+:\d{2}$", current_str):
                     continue
-                current_minutes = parse_duration(current_str)
-
-                new_shortage = max(0, current_minutes - delay_minutes)
+                current_minutes_step = parse_duration(current_str)
+                new_shortage = max(0, current_minutes_step - delay_minutes)
                 sheet.cell(nagwa_row, shortage_col).value = minutes_to_hhmm(new_shortage)
                 adjusted += 1
+
+            if extra_minutes > 0:
+                review_report.add_unused_pd(
+                    emp_code,
+                    _employee_display_name(sheet, nagwa_row),
+                    d,
+                    "" if leave_text is None else str(leave_text).strip(),
+                    current_minutes,
+                    granted_minutes,
+                    extra_minutes,
+                    sheet.cell(nagwa_row, shortage_col).value,
+                )
 
     print(f"Permitted-delay deductions done! {adjusted} shortage value(s) adjusted.")
     if warnings:
@@ -1830,6 +1902,10 @@ def fill_missing_punches(sheet, date_col_map, code_row_map, schedule_map=None, s
             sheet.cell(nagwa_row, in_col).value = _keep_punch_or_missing(in_val)
             sheet.cell(nagwa_row, out_col).value = _keep_punch_or_missing(out_val)
             sheet.cell(nagwa_row, shortage_col).value = "absent"
+            kept_in = sheet.cell(nagwa_row, in_col).value
+            kept_out = sheet.cell(nagwa_row, out_col).value
+            if parse_time_value(kept_in) is None and parse_time_value(kept_out) is None:
+                review_report.remember_absence_source(emp_code, d, "No punches")
             filled += 1
 
     print(f"Missing punch absence sweep done! {filled} day-cell(s) marked absent.")
@@ -1911,6 +1987,7 @@ def fill_full_day_absences(
             sheet.cell(nagwa_row, in_col).value = "absent"
             sheet.cell(nagwa_row, in_col + 1).value = "absent"
             sheet.cell(nagwa_row, in_col + 3).value = "absent"
+            review_report.remember_absence_source(emp_code, att_date, "Closed-world sweep")
             filled += 1
             flagged.append((emp_code, att_date))
 

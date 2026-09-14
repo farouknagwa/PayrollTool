@@ -473,6 +473,43 @@ summary {
   font-weight: 800;
 }
 
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.summary-cards .card {
+  margin-top: 0;
+}
+
+.summary-stats {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.summary-stats div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.summary-stats dt {
+  color: var(--nagwa-gray);
+}
+
+.summary-stats dd {
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+}
+
 .gotchas {
   display: flex;
   flex-wrap: wrap;

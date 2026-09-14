@@ -169,10 +169,44 @@ export interface PermissionPrepResult {
   warnings: string[];
 }
 
+export interface OutputSummaryNagwa {
+  workdays: number;
+  numericShortageDays: number;
+  totalShortageHours: string;
+  absentDays: number;
+  halfDayNoPunchDays: number;
+  missingPunchDays: number;
+  unusedPermittedDelayDays: number;
+}
+
+export interface OutputSummaryFinal {
+  aDays: number;
+  durationDays: number;
+}
+
+export interface OutputSummaryReview {
+  halfDayNoPunches: number;
+  missingPunch: number;
+  otherAbsences: number;
+  unusedPermittedDelay: number;
+}
+
+export interface OutputSummary {
+  periodStart: string;
+  periodEnd: string;
+  employeesProcessed: number;
+  generatedAt: string;
+  nagwa: OutputSummaryNagwa;
+  final: OutputSummaryFinal;
+  review: OutputSummaryReview;
+}
+
 export interface PayrollRunResult {
   detailedWorkbook: ArrayBuffer;
   finalWorkbook: ArrayBuffer;
+  reviewWorkbook: ArrayBuffer;
   preparedPermissionsWorkbook?: ArrayBuffer;
+  outputSummary: OutputSummary;
   metrics: StepMetrics[];
   logs: RunLogEntry[];
   period: PayrollPeriod;

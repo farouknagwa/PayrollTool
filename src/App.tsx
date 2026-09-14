@@ -3,7 +3,7 @@ import { saveAs } from "file-saver";
 import "./App.css";
 import { loadSettings, resetSettings, validateSettings } from "./config/storage";
 import { computePeriod } from "./core/dateTime";
-import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
+import type { ISODate, OutputSummary, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "./core/types";
 import { missingRequiredInputs, permissionMode } from "./io/files";
 import { detectAttendancePeriodDate, readWorkbook } from "./io/excel";
 
@@ -13,7 +13,7 @@ type WorkerResponse =
   | { type: "done"; result: PayrollRunResult }
   | { type: "error"; message: string };
 
-type AppTab = "inputs" | "settings" | "log" | "outputs";
+type AppTab = "inputs" | "settings" | "log" | "outputs" | "summary";
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -47,9 +47,64 @@ function stepLabel(step: string): string {
     fill_attendance: "Fill attendance",
     extend_final_nagwa_technologies: "Build final calendar",
     complete_final: "Complete final report",
+    review_report: "Payroll review",
     run: "Run",
   };
   return labels[step] ?? step;
+}
+
+function formatGeneratedAt(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function SummaryCard(props: { title: string; rows: Array<[string, string | number]> }) {
+  return (
+    <article className="card">
+      <h3>{props.title}</h3>
+      <dl className="summary-stats">
+        {props.rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
+}
+
+function summaryCards(summary: OutputSummary) {
+  return [
+    {
+      title: "Nagwa Technologies",
+      rows: [
+        ["Workdays", summary.nagwa.workdays],
+        ["Days with numeric shortage", summary.nagwa.numericShortageDays],
+        ["Total shortage hours", summary.nagwa.totalShortageHours],
+        ["Days marked absent", summary.nagwa.absentDays],
+        ["Half-day no-punch days", summary.nagwa.halfDayNoPunchDays],
+        ["Single missing-punch days", summary.nagwa.missingPunchDays],
+        ["Unused permitted-delay days", summary.nagwa.unusedPermittedDelayDays],
+      ] as Array<[string, string | number]>,
+    },
+    {
+      title: "Final Nagwa Technologies",
+      rows: [
+        ["Days marked A", summary.final.aDays],
+        ["Days written as duration", summary.final.durationDays],
+      ] as Array<[string, string | number]>,
+    },
+    {
+      title: "Payroll Review",
+      rows: [
+        ["Half-day no punches", summary.review.halfDayNoPunches],
+        ["Missing punch", summary.review.missingPunch],
+        ["Other absences", summary.review.otherAbsences],
+        ["Unused permitted delay", summary.review.unusedPermittedDelay],
+      ] as Array<[string, string | number]>,
+    },
+  ];
 }
 
 function TextInput(props: {
@@ -255,6 +310,7 @@ function App() {
     { id: "settings", label: "Settings" },
     { id: "log", label: "Run Log" },
     { id: "outputs", label: "Outputs" },
+    { id: "summary", label: "Summary" },
   ];
 
   return (
@@ -474,8 +530,8 @@ function App() {
         <section className="card tab-panel">
           <h2>Run Log</h2>
           <ol className="steps">
-            {["extend_nagwa_technologies", "fill_attendance", "extend_final_nagwa_technologies", "complete_final"].map((step, index) => (
-              <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/4 {stepLabel(step)}</li>
+            {["extend_nagwa_technologies", "fill_attendance", "extend_final_nagwa_technologies", "complete_final", "review_report"].map((step, index) => (
+              <li key={step} className={logs.some((entry) => entry.step === step) ? "active" : ""}>{index + 1}/5 {stepLabel(step)}</li>
             ))}
           </ol>
           <div className="log-panel">
@@ -492,6 +548,7 @@ function App() {
               <p><strong>Success.</strong> {result.employeesProcessed} employees, {result.period.dates.length} dates, {result.warnings.length} warnings.</p>
               <button type="button" onClick={() => downloadBuffer(result.detailedWorkbook, "Nagwa Technologies.xlsx")}>Download Nagwa Technologies.xlsx</button>
               <button type="button" onClick={() => downloadBuffer(result.finalWorkbook, "Final Nagwa Technologies.xlsx")}>Download Final Nagwa Technologies.xlsx</button>
+              <button type="button" onClick={() => downloadBuffer(result.reviewWorkbook, "Payroll Review.xlsx")}>Download Payroll Review.xlsx</button>
               {result.preparedPermissionsWorkbook && <button type="button" onClick={() => downloadBuffer(result.preparedPermissionsWorkbook as ArrayBuffer, "Nagwa_Permission_Request_permission_details.xls", "application/vnd.ms-excel")}>Download prepared permissions</button>}
             </div>
           ) : (
@@ -500,6 +557,33 @@ function App() {
           <div className="metrics">
             {metrics.map((metric) => <p key={metric.step}><strong>{stepLabel(metric.step)}</strong>: {formatMetric(metric)}</p>)}
           </div>
+        </section>
+      )}
+
+      {activeTab === "summary" && (
+        <section className="card tab-panel">
+          <h2>Summary</h2>
+          {result?.outputSummary ? (
+            <>
+              <p>
+                Period <strong>{result.outputSummary.periodStart}</strong>
+                {" → "}
+                <strong>{result.outputSummary.periodEnd}</strong>
+                . {result.outputSummary.employeesProcessed} employees processed.
+                Generated {formatGeneratedAt(result.outputSummary.generatedAt)}.
+              </p>
+              <div className="summary-cards">
+                {summaryCards(result.outputSummary).map((card) => (
+                  <SummaryCard key={card.title} title={card.title} rows={card.rows} />
+                ))}
+              </div>
+              <p className="helper-text">
+                Row-level exception lists are in Payroll Review.xlsx on the Outputs tab. Nagwa and Final stay the official grids.
+              </p>
+            </>
+          ) : (
+            <p>Summary will appear after a successful run.</p>
+          )}
         </section>
       )}
       </main>

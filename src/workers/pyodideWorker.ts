@@ -1,8 +1,9 @@
-import type { ISODate, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "../core/types";
+import type { ISODate, OutputSummary, PayrollInputFiles, PayrollRunResult, PayrollSettings, PermissionPrepOptions, RunLogEntry, StepMetrics } from "../core/types";
 import extendNagwaSource from "../py/extend_nagwa_technologies.py?raw";
 import fillAttendanceSource from "../py/fill_attendance.py?raw";
 import extendFinalSource from "../py/extend_final_nagwa_technologies.py?raw";
 import completeFinalSource from "../py/complete_final.py?raw";
+import reviewReportSource from "../py/review_report.py?raw";
 import preparePermissionSource from "../py/prepare_permission_report.py?raw";
 
 type PyodideLoadModule = {
@@ -166,6 +167,7 @@ function writePythonSources(pyodide: Pyodide) {
   pyodide.FS.writeFile(`${SCRIPTS_DIR}/fill_attendance.py`, fillAttendanceSource);
   pyodide.FS.writeFile(`${SCRIPTS_DIR}/extend_final_nagwa_technologies.py`, extendFinalSource);
   pyodide.FS.writeFile(`${SCRIPTS_DIR}/complete_final.py`, completeFinalSource);
+  pyodide.FS.writeFile(`${SCRIPTS_DIR}/review_report.py`, reviewReportSource);
   pyodide.FS.writeFile(`${PREPARE_DIR}/prepare_permission_report.py`, preparePermissionSource);
 }
 
@@ -222,6 +224,7 @@ for _name in [
     "scripts.complete_final",
     "scripts.extend_nagwa_technologies",
     "scripts.extend_final_nagwa_technologies",
+    "scripts.review_report",
     "prepare_permission_report",
 ]:
     _sys.modules.pop(_name, None)
@@ -334,6 +337,14 @@ function readOutput(pyodide: Pyodide, path: string): ArrayBuffer {
   return copy.buffer;
 }
 
+async function readOutputSummary(pyodide: Pyodide): Promise<OutputSummary> {
+  const raw = await pyodide.runPythonAsync(`
+from pathlib import Path
+Path("${OUTPUT_DIR}/payroll_review_summary.json").read_text()
+`);
+  return JSON.parse(String(raw)) as OutputSummary;
+}
+
 async function getRunInfo(pyodide: Pyodide): Promise<{ period: PayrollRunResult["period"]; employeesProcessed: number }> {
   const infoJson = await runPythonWithGlobals(pyodide, `
 import json
@@ -387,6 +398,7 @@ function standardMetrics(): StepMetrics[] {
     { step: "fill_attendance" },
     { step: "extend_final_nagwa_technologies" },
     { step: "complete_final" },
+    { step: "review_report" },
   ];
 }
 
@@ -424,17 +436,22 @@ async function runFullPipeline(request: RunRequest) {
   await runScriptMain(pyodide, "fill_attendance", "scripts.fill_attendance");
   await runScriptMain(pyodide, "extend_final_nagwa_technologies", "scripts.extend_final_nagwa_technologies");
   await runScriptMain(pyodide, "complete_final", "scripts.complete_final");
+  await runScriptMain(pyodide, "review_report", "scripts.review_report");
   postLog("run", "All scripts completed successfully.", "success");
 
   const detailedWorkbook = readOutput(pyodide, `${OUTPUT_DIR}/Nagwa Technologies.xlsx`);
   const finalWorkbook = readOutput(pyodide, `${OUTPUT_DIR}/Final Nagwa Technologies.xlsx`);
+  const reviewWorkbook = readOutput(pyodide, `${OUTPUT_DIR}/Payroll Review.xlsx`);
+  const outputSummary = await readOutputSummary(pyodide);
   const runInfo = await getRunInfo(pyodide);
   const warnings = logs.filter((entry) => entry.level === "warn").map((entry) => entry.message);
 
   const result: PayrollRunResult = {
     detailedWorkbook,
     finalWorkbook,
+    reviewWorkbook,
     preparedPermissionsWorkbook,
+    outputSummary,
     metrics: standardMetrics(),
     logs,
     period: runInfo.period,
